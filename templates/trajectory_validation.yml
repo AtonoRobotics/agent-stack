@@ -1,0 +1,66 @@
+---
+name: trajectory_validation
+description: Complete trajectory validation before real robot execution
+robot: configurable
+inputs:
+  urdf_path: required
+  start_pose: required
+  goal_pose: required
+  payload_mass: 5.3
+  payload_com: [0, 0, 0.12]
+steps:
+  - id: 1
+    skill: isaac_setup
+    method: load_urdf
+    params:
+      urdf_path: "{urdf_path}"
+  - id: 2
+    skill: curobo_setup
+    method: load_robot_config
+    params:
+      urdf_path: "{urdf_path}"
+  - id: 3
+    skill: curobo_setup
+    method: configure_payload
+    params:
+      mass: "{payload_mass}"
+      com_offset: "{payload_com}"
+  - id: 4
+    skill: curobo_setup
+    method: warmup
+  - id: 5
+    skill: trajectory_planning
+    method: plan_cartesian
+    params:
+      start_pose: "{start_pose}"
+      goal_pose: "{goal_pose}"
+  - id: 6
+    skill: trajectory_planning
+    method: validate_singularity
+  - id: 7
+    skill: trajectory_planning
+    method: validate_torque_limits
+    params:
+      payload:
+        mass: "{payload_mass}"
+        com: "{payload_com}"
+  - id: 8
+    skill: trajectory_planning
+    method: validate_workspace
+  - id: 9
+    skill: trajectory_planning
+    method: compute_manipulability
+  - id: 10
+    skill: trajectory_execution
+    method: execute_with_logging
+    params:
+      log_path: results/trajectory_log.json
+  - id: 11
+    skill: analysis
+    method: compute_path_error
+  - id: 12
+    skill: analysis
+    method: generate_analysis_report
+output:
+  - results/trajectory_validation_report.md
+  - results/trajectory_log.json

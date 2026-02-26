@@ -1,0 +1,70 @@
+---
+name: singularity_demo
+description: cuRobo vs kinematic singularity comparison demo
+robot: dobot_cr10
+inputs:
+  urdf_path: required
+  payload_mass: 5.3
+  payload_com: [0, 0, 0.12]
+  waypoints: auto-calculate
+steps:
+  - id: 1
+    skill: isaac_setup
+    method: load_urdf
+    params:
+      urdf_path: "{urdf_path}"
+      position: [0, 0, 0]
+  - id: 2
+    skill: isaac_setup
+    method: configure_physics
+    params:
+      dt: 0.004167
+      gravity: -9.81
+  - id: 3
+    skill: curobo_setup
+    method: load_robot_config
+    params:
+      urdf_path: "{urdf_path}"
+  - id: 4
+    skill: curobo_setup
+    method: configure_payload
+    params:
+      mass: "{payload_mass}"
+      com_offset: "{payload_com}"
+  - id: 5
+    skill: curobo_setup
+    method: warmup
+  - id: 6
+    skill: trajectory_planning
+    method: plan_waypoints
+    params:
+      planner: curobo
+  - id: 7
+    skill: trajectory_planning
+    method: plan_waypoints
+    params:
+      planner: kinematic
+  - id: 8
+    skill: trajectory_execution
+    method: execute_comparison
+    params:
+      slowdown: 0.5
+  - id: 9
+    skill: analysis
+    method: compute_path_error
+  - id: 10
+    skill: trajectory_planning
+    method: compute_manipulability
+  - id: 11
+    skill: visualization
+    method: plot_comparison
+    params:
+      save_path: results/singularity_comparison.png
+  - id: 12
+    skill: visualization
+    method: plot_manipulability
+    params:
+      save_path: results/manipulability_index.png
+output:
+  - results/singularity_comparison.png
+  - results/manipulability_index.png

@@ -1,0 +1,60 @@
+---
+name: isaac_ros_setup
+description: Isaac ROS node graph setup and validation
+robot: configurable
+inputs:
+  perception_nodes: [stereo_camera, depth_estimation]
+  navigation_nodes: [nvblox, nav2]
+steps:
+  - id: 1
+    skill: isaac_ros_nodes
+    method: list_available_nodes
+  - id: 2
+    skill: isaac_ros_nodes
+    method: launch_node
+    params:
+      node_name: stereo_camera
+      params: default
+  - id: 3
+    skill: isaac_ros_nodes
+    method: launch_node
+    params:
+      node_name: depth_estimation
+      params: default
+  - id: 4
+    skill: isaac_ros_nodes
+    method: configure_node
+    params:
+      node_name: stereo_camera
+      params:
+        resolution: [1920, 1080]
+        fps: 30
+  - id: 5
+    skill: isaac_ros_nodes
+    method: connect_nodes
+    params:
+      source: stereo_camera
+      target: depth_estimation
+      topic: /camera/image_raw
+  - id: 6
+    skill: isaac_ros_nodes
+    method: build_node_graph
+    params:
+      nodes: "{perception_nodes}"
+  - id: 7
+    skill: isaac_ros_nodes
+    method: test_node_latency
+    params:
+      node_name: all
+  - id: 8
+    skill: isaac_ros_nodes
+    method: export_launch_file
+    params:
+      path: launch/isaac_ros.launch.py
+  - id: 9
+    skill: isaac_ros_nodes
+    method: monitor_node_health
+    params:
+      node_name: all
+output:
+  - launch/isaac_ros.launch.py

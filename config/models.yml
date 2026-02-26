@@ -1,0 +1,45 @@
+---
+policy:
+  local_first: true
+  max_local_retries: 3
+  fallback_to_api: false
+  require_explicit_approval_for_api: true
+  log_all_api_calls: true
+
+models:
+  code_generation:
+    model: qwen2.5-coder:32b
+    host: spark-2b53.local
+    port: 11434
+  research:
+    model: qwen2.5:72b
+    host: spark-2b53.local
+    port: 11434
+  sysadmin:
+    model: qwen2.5:72b
+    host: spark-2b53.local
+    port: 11434
+  simulation:
+    model: qwen2.5:72b
+    host: spark-2b53.local
+    port: 11434
+  cosmos:
+    model: qwen2.5:72b
+    host: spark-2b53.local
+    port: 11434
+  groot:
+    model: qwen2.5:72b
+    host: spark-2b53.local
+    port: 11434
+  monitoring:
+    model: qwen2.5:7b
+    host: localhost
+    port: 11434
+  health_check:
+    model: qwen2.5:7b
+    host: localhost
+    port: 11434
+  fallback:
+    provider: anthropic
+    model: claude-sonnet-4-20250514
+    max_retries_before_fallback: 3

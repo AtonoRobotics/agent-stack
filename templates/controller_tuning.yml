@@ -1,0 +1,53 @@
+---
+name: controller_tuning
+description: PID and impedance controller tuning pipeline
+robot: configurable
+inputs:
+  urdf_path: required
+  plant_model: required
+  test_trajectory: required
+  requirements:
+    settling_time: 0.1
+    overshoot_pct: 5
+    steady_state_error: 0.001
+steps:
+  - id: 1
+    skill: isaac_setup
+    method: load_urdf
+    params:
+      urdf_path: "{urdf_path}"
+  - id: 2
+    skill: controller_design
+    method: design_pid
+    params:
+      plant_model: "{plant_model}"
+      requirements: "{requirements}"
+  - id: 3
+    skill: controller_design
+    method: test_performance
+    params:
+      trajectory: "{test_trajectory}"
+  - id: 4
+    skill: controller_design
+    method: tune_pid
+    params:
+      response_data: auto
+  - id: 5
+    skill: controller_design
+    method: validate_stability
+  - id: 6
+    skill: controller_design
+    method: design_impedance_controller
+    params:
+      stiffness: auto
+      damping: auto
+  - id: 7
+    skill: controller_design
+    method: test_performance
+    params:
+      trajectory: "{test_trajectory}"
+  - id: 8
+    skill: controller_design
+    method: generate_report
+output:
+  - results/controller_tuning_report.md

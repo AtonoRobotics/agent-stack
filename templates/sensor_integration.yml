@@ -1,0 +1,65 @@
+---
+name: sensor_integration
+description: Full sensor suite integration and validation
+robot: configurable
+inputs:
+  urdf_path: required
+  camera_position: [0.5, 0, 0.3]
+  camera_resolution: [1920, 1080]
+  camera_fps: 30
+steps:
+  - id: 1
+    skill: isaac_setup
+    method: load_urdf
+    params:
+      urdf_path: "{urdf_path}"
+  - id: 2
+    skill: isaac_setup
+    method: configure_physics
+  - id: 3
+    skill: sensor_setup
+    method: add_camera
+    params:
+      type: rgb_depth
+      position: "{camera_position}"
+      resolution: "{camera_resolution}"
+      fps: "{camera_fps}"
+  - id: 4
+    skill: sensor_setup
+    method: add_imu
+    params:
+      position: [0, 0, 0]
+      noise_model: gaussian
+  - id: 5
+    skill: sensor_setup
+    method: add_force_torque_sensor
+    params:
+      joint: wrist
+      noise_model: gaussian
+  - id: 6
+    skill: sensor_setup
+    method: add_joint_encoder
+    params:
+      joint: all
+      resolution: 4096
+      noise: 0.001
+  - id: 7
+    skill: sensor_setup
+    method: configure_zed_x
+    params:
+      position: "{camera_position}"
+      baseline: 0.12
+  - id: 8
+    skill: sensor_setup
+    method: validate_sensor_coverage
+  - id: 9
+    skill: sensor_testing
+    method: test_camera_calibration
+  - id: 10
+    skill: sensor_testing
+    method: test_sensor_sync
+  - id: 11
+    skill: sensor_testing
+    method: generate_sensor_report
+output:
+  - results/sensor_report.md

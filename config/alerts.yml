@@ -1,0 +1,7 @@
+---
+thresholds:
+  gpu_temp_c: 85
+  gpu_vram_pct: 95
+  ram_pct: 90
+  disk_pct: 85
+  machine_offline_minutes: 5

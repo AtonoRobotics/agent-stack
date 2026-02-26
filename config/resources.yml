@@ -1,0 +1,15 @@
+---
+limits:
+  workstation:
+    max_vram_gb: 10
+    max_ram_gb: 28
+    max_disk_pct: 85
+  dgx-spark:
+    max_ram_gb: 120
+    max_disk_pct: 85
+  agx-thor:
+    max_ram_gb: 60
+    max_disk_pct: 85
+  orin-nano:
+    max_ram_gb: 7
+    max_disk_pct: 85

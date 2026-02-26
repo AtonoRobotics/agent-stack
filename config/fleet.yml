@@ -1,0 +1,38 @@
+---
+machines:
+  workstation:
+    user: samuel
+    host: localhost
+    os: Ubuntu 24.04
+    arch: x86_64
+    gpu: RTX 4070 12GB
+    ram: 32GB
+    roles: [development, monitoring]
+  dgx-spark:
+    user: zero
+    host: spark-2b53.local
+    os: DGX OS 7.4.0
+    arch: ARM64
+    gpu: 128GB unified
+    ram: 128GB
+    roles: [inference, training, cosmos]
+  agx-thor:
+    user: samuel
+    host: alpha-agx-thor
+    os: JetPack 7.1
+    arch: ARM64
+    gpu: 60GB unified
+    ram: 64GB
+    role: compute_node
+    description: Edge inference and deployment
+    roles: [edge_inference, deployment]
+  orin-nano:
+    user: samuel
+    host: alpha-orin-nano
+    os: JetPack TBD
+    arch: ARM64
+    gpu: 8GB unified
+    ram: 8GB
+    role: compute_node
+    description: Edge deployment target
+    roles: [edge_deployment]

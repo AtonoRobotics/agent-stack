@@ -1,0 +1,4 @@
+---
+agent_stack: alpha-agent-stack
+robots:
+  dobot_cr10: dobot-cr10-stack

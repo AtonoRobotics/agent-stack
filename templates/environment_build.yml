@@ -1,0 +1,65 @@
+---
+name: environment_build
+description: Build and configure simulation environment
+robot: configurable
+inputs:
+  environment_type: tabletop
+  randomize: true
+  random_seed: 42
+steps:
+  - id: 1
+    skill: environment_builder
+    method: create_environment
+    params:
+      config:
+        type: "{environment_type}"
+        size: [2.0, 2.0, 2.0]
+  - id: 2
+    skill: isaac_setup
+    method: setup_ground_plane
+  - id: 3
+    skill: environment_builder
+    method: add_static_obstacle
+    params:
+      mesh: table
+      pose: [0.5, 0, 0]
+      physics: static
+  - id: 4
+    skill: environment_builder
+    method: add_static_obstacle
+    params:
+      mesh: shelf
+      pose: [0, 0.8, 0]
+      physics: static
+  - id: 5
+    skill: environment_builder
+    method: add_dynamic_obstacle
+    params:
+      mesh: box
+      pose: [0.5, 0.2, 0.8]
+      velocity: [0, 0, 0]
+  - id: 6
+    skill: isaac_setup
+    method: setup_lighting
+    params:
+      type: dome
+  - id: 7
+    skill: environment_builder
+    method: add_lighting
+    params:
+      type: fill
+      position: [1, 1, 2]
+      intensity: 500
+  - id: 8
+    skill: environment_builder
+    method: randomize_environment
+    params:
+      seed: "{random_seed}"
+    condition: "{randomize}"
+  - id: 9
+    skill: environment_builder
+    method: save_environment
+    params:
+      path: environments/{environment_type}.usd
+output:
+  - environments/{environment_type}.usd
