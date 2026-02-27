@@ -2,12 +2,25 @@
 # Mission Control - Proprietary Software
 # © 2026 Alpha. All rights reserved.
 # Unauthorized use or distribution prohibited.
-"""ROS2 robot status collection via subprocess for Dobot CR10."""
+"""ROS2 robot status collection via subprocess for Dobot CR10.
 
+Supports dual data sources: ROS2 (subprocess) and TCP (async driver).
+"""
+
+import asyncio
 import json
+import logging
 import math
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+# ── Dual-source state ────────────────────────────────────
+_dobot_driver = None  # Optional DobotCR10Driver instance
+_data_source: str = "ros2"  # "ros2" or "tcp"
+_ros2_executor = ThreadPoolExecutor(max_workers=1)
 
 
 def _run_ros2_cmd(args: list, timeout: float = 5.0) -> Optional[str]:
@@ -271,3 +284,67 @@ def get_full_status() -> dict:
         result["pose"] = pose.get("pose")
 
     return result
+
+
+# ── Dual-source abstraction ──────────────────────────────
+
+async def init_tcp_driver(host: str = "192.168.5.1",
+                          dashboard_port: int = 29999,
+                          control_port: int = 30003,
+                          feedback_port: int = 30004) -> dict:
+    """Create and connect the TCP driver. Returns connection status."""
+    global _dobot_driver
+    from tools.dobot_driver import DobotCR10Driver
+    _dobot_driver = DobotCR10Driver(host, dashboard_port, control_port, feedback_port)
+    status = await _dobot_driver.connect()
+    if status.get("feedback"):
+        await _dobot_driver.start_feedback_stream()
+    logger.info(f"TCP driver initialized: {status}")
+    return status
+
+
+async def disconnect_tcp_driver():
+    """Disconnect and tear down the TCP driver."""
+    global _dobot_driver
+    if _dobot_driver:
+        await _dobot_driver.disconnect()
+        _dobot_driver = None
+    logger.info("TCP driver disconnected")
+
+
+def get_data_source() -> str:
+    """Return current data source: 'ros2' or 'tcp'."""
+    return _data_source
+
+
+def set_data_source(source: str):
+    """Switch data source. Must be 'ros2' or 'tcp'."""
+    global _data_source
+    if source not in ("ros2", "tcp"):
+        raise ValueError(f"Invalid data source: {source}")
+    _data_source = source
+    logger.info(f"Data source set to: {source}")
+
+
+async def get_full_status_async() -> dict:
+    """Get full robot status from the active data source.
+
+    If tcp: uses the async driver directly.
+    If ros2: runs the sync get_full_status() in a thread executor.
+    """
+    if _data_source == "tcp" and _dobot_driver:
+        return await _dobot_driver.get_full_status()
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(_ros2_executor, get_full_status)
+
+
+def get_tcp_connection_status() -> dict:
+    """Return TCP driver connection status, or all-disconnected if no driver."""
+    if _dobot_driver:
+        return _dobot_driver.connection_status
+    return {"dashboard": False, "control": False, "feedback": False}
+
+
+def get_tcp_driver():
+    """Return the TCP driver instance (or None)."""
+    return _dobot_driver

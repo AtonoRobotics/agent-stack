@@ -36,3 +36,13 @@ machines:
     role: compute_node
     description: Edge deployment target
     roles: [edge_deployment]
+
+robots:
+  dobot_cr10:
+    tcp_enabled: true
+    tcp_host: 192.168.5.1
+    tcp_ports:
+      dashboard: 29999
+      control: 30003
+      feedback: 30004
+    data_source: ros2  # ros2 or tcp

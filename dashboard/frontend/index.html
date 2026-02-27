@@ -1450,10 +1450,11 @@ function RobotDetailPage() {
     ),
 
     // Tabs
-    e(TabNav, { tabs: ['Overview', 'Simulations', 'Training', 'Safety', 'Deployments', 'ROS2'], active: activeTab, onChange: setActiveTab }),
+    e(TabNav, { tabs: ['Overview', 'Telemetry', 'Simulations', 'Training', 'Safety', 'Deployments', 'ROS2'], active: activeTab, onChange: setActiveTab }),
 
     // Tab content
-    activeTab === 'Overview' ? e(RobotOverviewTab, { robot: robot }) : null,
+    activeTab === 'Overview' ? e(RobotOverviewTab, { robot: robot, robotId: robotId }) : null,
+    activeTab === 'Telemetry' ? e(RobotTelemetryTab, { robot: robot, robotId: robotId }) : null,
     activeTab === 'Simulations' ? e(RobotSimulationsTab, { robot: robot }) : null,
     activeTab === 'Training' ? e(RobotTrainingTab, { robot: robot }) : null,
     activeTab === 'Safety' ? e(RobotSafetyTab, { robot: robot }) : null,
@@ -1464,14 +1465,41 @@ function RobotDetailPage() {
 
 function RobotOverviewTab(props) {
   var r = props.robot;
+  var robotId = props.robotId || r.id || 'dobot_cr10';
+
+  // Live status from WebSocket
+  var liveState = useState({ online: false, joints: [], mode: 'unknown', pose: null, tcp_connection: {}, data_source: 'ros2' });
+  var live = liveState[0];
+  var setLive = liveState[1];
+
+  useEffect(function() {
+    var wsToken = localStorage.getItem('mc_token') || '';
+    var protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    var ws = null;
+    var reconnectTimer = null;
+
+    function connect() {
+      ws = new WebSocket(protocol + '//' + location.host + '/ws/robot/' + robotId + '?token=' + encodeURIComponent(wsToken));
+      ws.onmessage = function(evt) {
+        try {
+          var msg = JSON.parse(evt.data);
+          if (msg.type === 'robot_status' && msg.data) setLive(msg.data);
+        } catch(ex) {}
+      };
+      ws.onclose = function() { reconnectTimer = setTimeout(connect, 3000); };
+    }
+    connect();
+    return function() {
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (ws) { try { ws.close(); } catch(ex) {} }
+    };
+  }, [robotId]);
+
+  // Static sparkline data for sim/training metrics
   var sparkData = [];
-  for (var i = 0; i < 20; i++) {
-    sparkData.push({ v: 90 + Math.random() * 10 - 5 });
-  }
+  for (var i = 0; i < 20; i++) sparkData.push({ v: 90 + Math.random() * 10 - 5 });
   var lossSparkData = [];
-  for (var j = 0; j < 20; j++) {
-    lossSparkData.push({ v: 0.05 * Math.exp(-0.1 * j) + Math.random() * 0.005 });
-  }
+  for (var j = 0; j < 20; j++) lossSparkData.push({ v: 0.05 * Math.exp(-0.1 * j) + Math.random() * 0.005 });
 
   function SparklineCard(cardProps) {
     return e('div', { className: 'stat-card' },
@@ -1487,13 +1515,215 @@ function RobotOverviewTab(props) {
     );
   }
 
-  return e('div', { className: 'grid-3' },
-    e(SparklineCard, { label: 'Sim Score', value: r.simScore + '%', data: sparkData, color: '#E8A020' }),
-    e(SparklineCard, { label: 'Train Loss', value: r.trainLoss.toFixed(4), data: lossSparkData, color: '#4CAF50' }),
-    e(SparklineCard, { label: 'Uptime', value: r.uptime, data: sparkData, color: '#2196F3' }),
-    e(SparklineCard, { label: 'Missions', value: String(r.missions), data: sparkData.map(function(d) { return { v: d.v * 1.5 }; }), color: '#E8A020' }),
-    e(SparklineCard, { label: 'Safety Score', value: r.safetyScore + '%', data: sparkData.map(function(d) { return { v: 95 + Math.random() * 5 }; }), color: '#4CAF50' }),
-    e(SparklineCard, { label: 'Policy Version', value: r.policy, data: sparkData, color: '#808080' })
+  // Joint angle summary
+  var jointSummary = (live.joints || []).slice(0, 6).map(function(j) {
+    return (j.position_deg || 0).toFixed(1) + '\u00B0';
+  }).join('  ');
+
+  // End-effector position
+  var pose = live.pose;
+  var poseStr = pose ? 'X:' + pose.x + '  Y:' + pose.y + '  Z:' + pose.z : '--';
+
+  function handleSourceChange(newSource) {
+    setLive(Object.assign({}, live, { data_source: newSource }));
+  }
+
+  return e('div', null,
+    // Live status cards row
+    e('div', { className: 'grid-4 mb-20' },
+      e('div', { className: 'stat-card' },
+        e('div', { className: 'stat-card__label' }, 'Status'),
+        e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' } },
+          e(StatusDot, { status: live.online ? 'online' : 'offline', large: true }),
+          e('span', { style: { fontSize: '18px', fontWeight: 700, color: live.online ? 'var(--success)' : 'var(--danger)' } }, live.online ? 'ONLINE' : 'OFFLINE')
+        )
+      ),
+      e('div', { className: 'stat-card' },
+        e('div', { className: 'stat-card__label' }, 'Mode'),
+        e('div', { className: 'stat-card__value' }, live.mode || 'unknown')
+      ),
+      e('div', { className: 'stat-card' },
+        e('div', { className: 'stat-card__label' }, 'End Effector'),
+        e('div', { style: { fontFamily: 'var(--font-mono)', fontSize: '12px', marginTop: '6px', color: 'var(--text)' } }, poseStr)
+      ),
+      e('div', { className: 'stat-card' },
+        e('div', { className: 'stat-card__label' }, 'Joints'),
+        e('div', { style: { fontFamily: 'var(--font-mono)', fontSize: '11px', marginTop: '6px', color: 'var(--text)' } }, jointSummary || 'No data')
+      )
+    ),
+
+    // Indicators row
+    e('div', { style: { display: 'flex', gap: '10px', marginBottom: '16px', alignItems: 'center' } },
+      e(TcpConnectionIndicator, { tcp: live.tcp_connection }),
+      e(DataSourceBadge, { source: live.data_source, robotId: robotId, onChange: handleSourceChange })
+    ),
+
+    // Historical sparkline cards
+    e('div', { className: 'grid-3' },
+      e(SparklineCard, { label: 'Sim Score', value: r.simScore + '%', data: sparkData, color: '#E8A020' }),
+      e(SparklineCard, { label: 'Train Loss', value: r.trainLoss.toFixed(4), data: lossSparkData, color: '#4CAF50' }),
+      e(SparklineCard, { label: 'Uptime', value: r.uptime, data: sparkData, color: '#2196F3' }),
+      e(SparklineCard, { label: 'Missions', value: String(r.missions), data: sparkData.map(function(d) { return { v: d.v * 1.5 }; }), color: '#E8A020' }),
+      e(SparklineCard, { label: 'Safety Score', value: r.safetyScore + '%', data: sparkData.map(function(d) { return { v: 95 + Math.random() * 5 }; }), color: '#4CAF50' }),
+      e(SparklineCard, { label: 'Policy Version', value: r.policy, data: sparkData, color: '#808080' })
+    )
+  );
+}
+
+// ── Robot Telemetry Tab ──────────────────────────────────
+function RobotTelemetryTab(props) {
+  var robotId = props.robotId || (props.robot && props.robot.id) || 'dobot_cr10';
+  var COLORS = ['#E8A020', '#4CAF50', '#2196F3', '#FF9800', '#9C27B0', '#F44336'];
+  var MAX_SAMPLES = 300;
+
+  // Ring buffer for 30s of data at 10Hz
+  var posBufferRef = useRef([]);
+  var velBufferRef = useRef([]);
+
+  var posState = useState([]);
+  var posData = posState[0];
+  var setPosData = posState[1];
+
+  var velState = useState([]);
+  var velData = velState[0];
+  var setVelData = velState[1];
+
+  var currentState = useState([]);
+  var currentValues = currentState[0];
+  var setCurrentValues = currentState[1];
+
+  // WebSocket for 10Hz joint data
+  useEffect(function() {
+    var wsToken = localStorage.getItem('mc_token') || '';
+    var protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    var ws = null;
+    var reconnectTimer = null;
+    var frameCount = 0;
+
+    function connect() {
+      ws = new WebSocket(protocol + '//' + location.host + '/ws/robot/' + robotId + '?token=' + encodeURIComponent(wsToken));
+      ws.onmessage = function(evt) {
+        try {
+          var msg = JSON.parse(evt.data);
+          if (msg.type !== 'robot_status' || !msg.data || !msg.data.joints) return;
+          var joints = msg.data.joints;
+          frameCount++;
+
+          // Build position point
+          var posPoint = { t: frameCount };
+          var velPoint = { t: frameCount };
+          var vals = [];
+          for (var i = 0; i < Math.min(joints.length, 6); i++) {
+            posPoint['j' + (i + 1)] = (joints[i].position_deg || 0);
+            velPoint['j' + (i + 1)] = Math.abs(joints[i].velocity || 0);
+            vals.push({
+              name: joints[i].name || ('J' + (i + 1)),
+              position: (joints[i].position_deg || 0).toFixed(2),
+              velocity: (joints[i].velocity || 0).toFixed(4),
+              effort: (joints[i].effort || 0).toFixed(2)
+            });
+          }
+
+          posBufferRef.current.push(posPoint);
+          if (posBufferRef.current.length > MAX_SAMPLES) posBufferRef.current.shift();
+          velBufferRef.current.push(velPoint);
+          if (velBufferRef.current.length > MAX_SAMPLES) velBufferRef.current.shift();
+
+          // Update state every 3 frames (~3Hz render) to avoid excessive re-renders
+          if (frameCount % 3 === 0) {
+            setPosData(posBufferRef.current.slice());
+            setVelData(velBufferRef.current.slice());
+            setCurrentValues(vals);
+          }
+        } catch(ex) {}
+      };
+      ws.onclose = function() { reconnectTimer = setTimeout(connect, 3000); };
+    }
+    connect();
+    return function() {
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (ws) { try { ws.close(); } catch(ex) {} }
+    };
+  }, [robotId]);
+
+  var chartMargin = { top: 10, right: 20, left: 10, bottom: 10 };
+  var tooltipStyle = { background: '#242424', border: '1px solid #2E2E2E', borderRadius: '6px', fontSize: '11px', fontFamily: 'JetBrains Mono' };
+
+  return e('div', null,
+    // Joint Positions chart
+    e('div', { className: 'card mb-20' },
+      e('div', { className: 'card__header' },
+        e('span', { className: 'card__title' }, 'Joint Positions (\u00B0)')
+      ),
+      e('div', { style: { height: '240px' } },
+        posData.length > 1
+          ? e(ResponsiveContainer, { width: '100%', height: 240 },
+              e(LineChart, { data: posData, margin: chartMargin },
+                e(CartesianGrid, { strokeDasharray: '3 3', stroke: '#2E2E2E' }),
+                e(XAxis, { dataKey: 't', tick: false }),
+                e(YAxis, { tick: { fill: '#808080', fontSize: 10, fontFamily: 'JetBrains Mono' }, domain: ['auto', 'auto'] }),
+                e(Tooltip, { contentStyle: tooltipStyle }),
+                e(Legend, { wrapperStyle: { fontSize: '11px' } }),
+                [0,1,2,3,4,5].map(function(i) {
+                  return e(Line, { key: 'pos'+i, type: 'monotone', dataKey: 'j' + (i+1), stroke: COLORS[i], strokeWidth: 1.5, dot: false, isAnimationActive: false, name: 'J' + (i+1) });
+                })
+              )
+            )
+          : e('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-dim)', fontSize: '12px' } }, 'Awaiting telemetry data...')
+      )
+    ),
+
+    // Joint Velocities chart
+    e('div', { className: 'card mb-20' },
+      e('div', { className: 'card__header' },
+        e('span', { className: 'card__title' }, 'Joint Velocities (rad/s)')
+      ),
+      e('div', { style: { height: '240px' } },
+        velData.length > 1
+          ? e(ResponsiveContainer, { width: '100%', height: 240 },
+              e(LineChart, { data: velData, margin: chartMargin },
+                e(CartesianGrid, { strokeDasharray: '3 3', stroke: '#2E2E2E' }),
+                e(XAxis, { dataKey: 't', tick: false }),
+                e(YAxis, { tick: { fill: '#808080', fontSize: 10, fontFamily: 'JetBrains Mono' }, domain: [0, 'auto'] }),
+                e(Tooltip, { contentStyle: tooltipStyle }),
+                e(Legend, { wrapperStyle: { fontSize: '11px' } }),
+                [0,1,2,3,4,5].map(function(i) {
+                  return e(Line, { key: 'vel'+i, type: 'monotone', dataKey: 'j' + (i+1), stroke: COLORS[i], strokeWidth: 1.5, dot: false, isAnimationActive: false, name: 'J' + (i+1) });
+                })
+              )
+            )
+          : e('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-dim)', fontSize: '12px' } }, 'Awaiting telemetry data...')
+      )
+    ),
+
+    // Current values table
+    e('div', { className: 'card' },
+      e('div', { className: 'card__header' },
+        e('span', { className: 'card__title' }, 'Current Joint Values')
+      ),
+      e('table', { style: { width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--font-mono)', fontSize: '12px' } },
+        e('thead', null,
+          e('tr', { style: { borderBottom: '1px solid var(--border)' } },
+            e('th', { style: { padding: '8px 12px', textAlign: 'left', color: 'var(--text-secondary)', fontWeight: 600, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.5px' } }, 'Joint'),
+            e('th', { style: { padding: '8px 12px', textAlign: 'right', color: 'var(--text-secondary)', fontWeight: 600, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.5px' } }, 'Position (\u00B0)'),
+            e('th', { style: { padding: '8px 12px', textAlign: 'right', color: 'var(--text-secondary)', fontWeight: 600, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.5px' } }, 'Velocity (rad/s)'),
+            e('th', { style: { padding: '8px 12px', textAlign: 'right', color: 'var(--text-secondary)', fontWeight: 600, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.5px' } }, 'Effort')
+          )
+        ),
+        e('tbody', null,
+          currentValues.length > 0
+            ? currentValues.map(function(v, idx) {
+                return e('tr', { key: idx, style: { borderBottom: '1px solid var(--border)' } },
+                  e('td', { style: { padding: '8px 12px', color: COLORS[idx] || 'var(--text)', fontWeight: 600 } }, v.name),
+                  e('td', { style: { padding: '8px 12px', textAlign: 'right' } }, v.position),
+                  e('td', { style: { padding: '8px 12px', textAlign: 'right' } }, v.velocity),
+                  e('td', { style: { padding: '8px 12px', textAlign: 'right' } }, v.effort)
+                );
+              })
+            : e('tr', null, e('td', { colSpan: 4, style: { padding: '20px', textAlign: 'center', color: 'var(--text-dim)' } }, 'No joint data'))
+        )
+      )
+    )
   );
 }
 
@@ -2833,6 +3063,53 @@ function VelocityChart(props) {
   );
 }
 
+// TCP Connection Indicator pill
+function TcpConnectionIndicator(props) {
+  var tcp = props.tcp || {};
+  var allUp = tcp.dashboard && tcp.control && tcp.feedback;
+  var anyUp = tcp.dashboard || tcp.control || tcp.feedback;
+  var label = allUp ? 'Connected' : anyUp ? 'Partial' : 'Disconnected';
+  var color = allUp ? 'var(--success)' : anyUp ? 'var(--warning)' : 'var(--danger)';
+  return e('div', {
+    style: {
+      display: 'inline-flex', alignItems: 'center', gap: '6px',
+      padding: '3px 10px', borderRadius: '12px', fontSize: '10px', fontWeight: 600,
+      background: color + '18', border: '1px solid ' + color + '44',
+      color: color, textTransform: 'uppercase', letterSpacing: '0.5px'
+    }
+  },
+    e('div', { style: { width: '6px', height: '6px', borderRadius: '50%', background: color } }),
+    'TCP: ' + label,
+    props.host ? e('span', { style: { opacity: 0.7, fontWeight: 400, marginLeft: '4px' } }, props.host) : null
+  );
+}
+
+// Data Source Badge with click-to-switch
+function DataSourceBadge(props) {
+  var source = props.source || 'ros2';
+  var color = source === 'tcp' ? 'var(--info)' : 'var(--accent)';
+  function handleClick() {
+    var newSource = source === 'ros2' ? 'tcp' : 'ros2';
+    authFetch('/api/robot/' + (props.robotId || 'dobot_cr10') + '/source', {
+      method: 'POST',
+      body: JSON.stringify({ source: newSource })
+    }).then(function() {
+      if (props.onChange) props.onChange(newSource);
+    }).catch(function() {});
+  }
+  return e('button', {
+    onClick: handleClick,
+    title: 'Click to switch data source',
+    style: {
+      display: 'inline-flex', alignItems: 'center', gap: '5px',
+      padding: '3px 10px', borderRadius: '12px', fontSize: '10px', fontWeight: 700,
+      background: color + '18', border: '1px solid ' + color + '44',
+      color: color, textTransform: 'uppercase', letterSpacing: '0.5px',
+      cursor: 'pointer', transition: 'all 150ms ease'
+    }
+  }, source.toUpperCase());
+}
+
 // Cockpit Header
 function CockpitHeader(props) {
   var nav = React.useContext(NavContext);
@@ -2852,6 +3129,12 @@ function CockpitHeader(props) {
         e('div', { className: 'cockpit-header__meta-item' },
           e('span', null, 'DOF:'),
           e('span', { className: 'val' }, String(props.dof || 6))
+        ),
+        e('div', { className: 'cockpit-header__meta-item', style: { marginLeft: '8px' } },
+          e(TcpConnectionIndicator, { tcp: props.tcpConnection, host: props.tcpHost })
+        ),
+        e('div', { className: 'cockpit-header__meta-item' },
+          e(DataSourceBadge, { source: props.dataSource, robotId: props.robotId, onChange: props.onSourceChange })
         )
       )
     ),
@@ -2868,7 +3151,7 @@ function CockpitPage() {
   var robotId = (nav.params && nav.params.id) || 'dobot_cr10';
 
   // State
-  var statusState = useState({ online: false, joints: [], mode: 'unknown', pose: null });
+  var statusState = useState({ online: false, joints: [], mode: 'unknown', pose: null, tcp_connection: {}, data_source: 'ros2' });
   var status = statusState[0];
   var setStatus = statusState[1];
 
@@ -2900,13 +3183,39 @@ function CockpitPage() {
       .catch(function() {});
   }, []);
 
-  // Poll status at 2hz (REST fallback, WS would be preferred)
+  // WebSocket for robot status at ~10hz (replaces REST polling)
   useEffect(function() {
-    function fetchAll() {
-      authFetch('/api/robot/' + robotId + '/status')
-        .then(function(r) { return r.json(); })
-        .then(setStatus)
-        .catch(function() {});
+    var wsToken = localStorage.getItem('mc_token') || '';
+    var protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    var ws = null;
+    var reconnectTimer = null;
+
+    function connect() {
+      ws = new WebSocket(protocol + '//' + location.host + '/ws/robot/' + robotId + '?token=' + encodeURIComponent(wsToken));
+      ws.onmessage = function(evt) {
+        try {
+          var msg = JSON.parse(evt.data);
+          if (msg.type === 'robot_status' && msg.data) {
+            setStatus(msg.data);
+          }
+        } catch(e) {}
+      };
+      ws.onclose = function() {
+        reconnectTimer = setTimeout(connect, 3000);
+      };
+      ws.onerror = function() {};
+    }
+    connect();
+
+    return function() {
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (ws) { try { ws.close(); } catch(e) {} }
+    };
+  }, [robotId]);
+
+  // Poll low-frequency data (topics, controllers, diagnostics) at 5s
+  useEffect(function() {
+    function fetchSlow() {
       authFetch('/api/robot/' + robotId + '/topics')
         .then(function(r) { return r.json(); })
         .then(function(d) { setTopics(d.topics || []); })
@@ -2920,16 +3229,24 @@ function CockpitPage() {
         .then(function(d) { setDiagnostics(d.diagnostics || []); })
         .catch(function() {});
     }
-    fetchAll();
-    var interval = setInterval(fetchAll, 500);
+    fetchSlow();
+    var interval = setInterval(fetchSlow, 5000);
     return function() { clearInterval(interval); };
-  }, []);
+  }, [robotId]);
 
   var urdfChain = urdfData ? (urdfData.kinematic_chain || []) : [];
   var online = status.online;
 
+  function handleSourceChange(newSource) {
+    setStatus(Object.assign({}, status, { data_source: newSource }));
+  }
+
   return e('div', { className: 'cockpit' },
-    e(CockpitHeader, { online: online, robotId: robotId, dof: urdfData ? urdfData.dof : 6 }),
+    e(CockpitHeader, {
+      online: online, robotId: robotId, dof: urdfData ? urdfData.dof : 6,
+      tcpConnection: status.tcp_connection, dataSource: status.data_source,
+      onSourceChange: handleSourceChange
+    }),
 
     // Row 1: 3D viewer + Joint gauges
     e('div', { className: 'cockpit-grid', style: { gridTemplateColumns: '1.5fr 1fr' } },

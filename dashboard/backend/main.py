@@ -77,9 +77,34 @@ async def require_admin(user: dict = Depends(get_current_user)) -> dict:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Optionally init TCP driver from fleet.yml config
+    fleet_cfg = load_yaml("fleet.yml")
+    robot_cfg = (fleet_cfg.get("robots") or {}).get("dobot_cr10", {})
+    if robot_cfg.get("tcp_enabled"):
+        try:
+            from dashboard.backend.robot_status import init_tcp_driver, set_data_source
+            ports = robot_cfg.get("tcp_ports", {})
+            await init_tcp_driver(
+                host=robot_cfg.get("tcp_host", "192.168.5.1"),
+                dashboard_port=ports.get("dashboard", 29999),
+                control_port=ports.get("control", 30003),
+                feedback_port=ports.get("feedback", 30004),
+            )
+            ds = robot_cfg.get("data_source", "ros2")
+            if ds in ("ros2", "tcp"):
+                set_data_source(ds)
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning(f"TCP driver init failed (non-fatal): {exc}")
     task = asyncio.create_task(ws_broadcast_loop())
     yield
     task.cancel()
+    # Cleanup TCP driver
+    try:
+        from dashboard.backend.robot_status import disconnect_tcp_driver
+        await disconnect_tcp_driver()
+    except Exception:
+        pass
 
 
 app = FastAPI(
@@ -425,6 +450,86 @@ async def get_robot_urdf(robot_id: str, user: dict = Depends(require_auth)):
     return parse_urdf()
 
 
+# ── TCP driver endpoints ──────────────────────────────────
+
+class JointAnglesRequest(BaseModel):
+    angles: list[float]
+
+
+class DataSourceRequest(BaseModel):
+    source: str
+
+
+@app.post("/api/robot/{robot_id}/tcp/connect")
+async def tcp_connect(robot_id: str, user: dict = Depends(require_operator)):
+    from dashboard.backend.robot_status import init_tcp_driver, get_tcp_connection_status
+    fleet_cfg = load_yaml("fleet.yml")
+    robot_cfg = (fleet_cfg.get("robots") or {}).get(robot_id, {})
+    ports = robot_cfg.get("tcp_ports", {})
+    status = await init_tcp_driver(
+        host=robot_cfg.get("tcp_host", "192.168.5.1"),
+        dashboard_port=ports.get("dashboard", 29999),
+        control_port=ports.get("control", 30003),
+        feedback_port=ports.get("feedback", 30004),
+    )
+    return {"ok": True, "connection": status}
+
+
+@app.post("/api/robot/{robot_id}/tcp/disconnect")
+async def tcp_disconnect(robot_id: str, user: dict = Depends(require_operator)):
+    from dashboard.backend.robot_status import disconnect_tcp_driver
+    await disconnect_tcp_driver()
+    return {"ok": True}
+
+
+@app.get("/api/robot/{robot_id}/tcp/status")
+async def tcp_status(robot_id: str, user: dict = Depends(require_auth)):
+    from dashboard.backend.robot_status import get_tcp_connection_status
+    return get_tcp_connection_status()
+
+
+@app.post("/api/robot/{robot_id}/tcp/joint_angles")
+async def tcp_joint_angles(robot_id: str, req: JointAnglesRequest, user: dict = Depends(require_operator)):
+    from dashboard.backend.robot_status import get_tcp_driver
+    from tools.dobot_driver import SafetyError
+    driver = get_tcp_driver()
+    if not driver:
+        raise HTTPException(status_code=400, detail="TCP driver not connected")
+    try:
+        result = await driver.set_joint_angles(req.angles)
+        return {"ok": True, "response": result}
+    except SafetyError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except ConnectionError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@app.post("/api/robot/{robot_id}/source")
+async def set_source(robot_id: str, req: DataSourceRequest, user: dict = Depends(require_operator)):
+    from dashboard.backend.robot_status import set_data_source
+    try:
+        set_data_source(req.source)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, "source": req.source}
+
+
+@app.get("/api/robot/{robot_id}/source")
+async def get_source(robot_id: str, user: dict = Depends(require_auth)):
+    from dashboard.backend.robot_status import get_data_source
+    return {"source": get_data_source()}
+
+
+@app.get("/api/robot/{robot_id}/telemetry")
+async def get_telemetry(robot_id: str, samples: int = Query(default=100), user: dict = Depends(require_auth)):
+    from dashboard.backend.robot_status import get_tcp_driver
+    driver = get_tcp_driver()
+    if not driver:
+        return {"frames": [], "count": 0}
+    history = driver.get_feedback_history(n=samples)
+    return {"frames": history, "count": len(history)}
+
+
 # ── Demo routes ───────────────────────────────────────────
 
 from dashboard.backend.demo_runner import DemoRunner, DEMO_REGISTRY
@@ -552,9 +657,12 @@ async def websocket_robot(websocket: WebSocket, robot_id: str, token: str = Quer
     try:
         while True:
             try:
-                from dashboard.backend.robot_status import get_full_status
-                loop = asyncio.get_event_loop()
-                status = await loop.run_in_executor(_ros2_executor, get_full_status)
+                from dashboard.backend.robot_status import (
+                    get_full_status_async, get_tcp_connection_status, get_data_source
+                )
+                status = await get_full_status_async()
+                status["tcp_connection"] = get_tcp_connection_status()
+                status["data_source"] = get_data_source()
                 await websocket.send_json({"type": "robot_status", "data": status})
                 await asyncio.sleep(0.1)  # ~10hz
             except asyncio.CancelledError:
