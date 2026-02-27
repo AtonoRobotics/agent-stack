@@ -1,0 +1,16 @@
+{
+  "Alpha CR10 - Alexa Mini 35mm": {
+    "camera_id": "alexa_mini",
+    "lens_id": "zeiss_mp_35",
+    "accessory_ids": [
+      "preston_mdr4"
+    ]
+  },
+  "Alpha CR10 - Alexa Mini 50mm": {
+    "camera_id": "alexa_mini",
+    "lens_id": "zeiss_mp_50",
+    "accessory_ids": [
+      "preston_mdr4"
+    ]
+  }
+}
