@@ -92,6 +92,20 @@ _TABLES_SQL = [
         agent TEXT, message TEXT, level TEXT
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS demo_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        demo_id TEXT NOT NULL,
+        started TEXT NOT NULL,
+        completed TEXT,
+        status TEXT DEFAULT 'running',
+        mode TEXT DEFAULT 'headless',
+        exit_code INTEGER,
+        metrics_json TEXT,
+        log_tail TEXT,
+        launched_by TEXT
+    )
+    """,
 ]
 
 

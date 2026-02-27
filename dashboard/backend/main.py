@@ -425,6 +425,111 @@ async def get_robot_urdf(robot_id: str, user: dict = Depends(require_auth)):
     return parse_urdf()
 
 
+# ── Demo routes ───────────────────────────────────────────
+
+from dashboard.backend.demo_runner import DemoRunner, DEMO_REGISTRY
+
+_demo_runner = DemoRunner()
+
+
+@app.get("/api/demos")
+async def list_demos(user: dict = Depends(require_auth)):
+    prereqs = await _demo_runner.check_prerequisites()
+    demos = []
+    for demo_id, info in DEMO_REGISTRY.items():
+        results = _demo_runner.get_results(demo_id)
+        status_info = _demo_runner.get_status(demo_id)
+        current_status = status_info.get("status", "idle") if status_info.get("demo_id") == demo_id else "idle"
+        if results.get("last_run") and results["last_run"].get("status") and current_status == "idle":
+            current_status = results["last_run"]["status"]
+        demos.append({
+            "id": demo_id,
+            "name": info["name"],
+            "description": info["description"],
+            "status": current_status,
+            "has_results": results.get("has_results", False),
+            "files": results.get("files", []),
+            "last_run": results.get("last_run"),
+            "has_csv": len(info.get("csv_files", [])) > 0,
+        })
+    return {"demos": demos, "prerequisites": prereqs}
+
+
+@app.get("/api/demos/{demo_id}/results")
+async def get_demo_results(demo_id: str, user: dict = Depends(require_auth)):
+    return _demo_runner.get_results(demo_id)
+
+
+@app.post("/api/demos/{demo_id}/run")
+async def run_demo(demo_id: str, user: dict = Depends(require_operator)):
+    try:
+        result = await _demo_runner.launch(demo_id, user.get("username", "unknown"))
+        return JSONResponse(result, status_code=202)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@app.delete("/api/demos/{demo_id}/stop")
+async def stop_demo(demo_id: str, user: dict = Depends(require_operator)):
+    try:
+        return await _demo_runner.stop(demo_id)
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@app.get("/api/demos/{demo_id}/log")
+async def get_demo_log(demo_id: str, offset: int = 0, user: dict = Depends(require_auth)):
+    lines = _demo_runner.get_log(demo_id, offset)
+    return {"demo_id": demo_id, "offset": offset, "lines": lines, "count": len(lines)}
+
+
+@app.get("/api/demos/files/{filename}")
+async def serve_demo_file(filename: str, user: dict = Depends(require_auth)):
+    import re as _re
+    if not _re.match(r'^[a-zA-Z0-9_.-]+\.(png|csv)$', filename):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    results_dir = os.path.expanduser("~/dobot_cr10/results")
+    file_path = os.path.join(results_dir, filename)
+    resolved = os.path.realpath(file_path)
+    if not resolved.startswith(os.path.realpath(results_dir)):
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not os.path.exists(resolved):
+        raise HTTPException(status_code=404, detail="File not found")
+    media_type = "image/png" if filename.endswith(".png") else "text/csv"
+    return FileResponse(resolved, media_type=media_type, filename=filename)
+
+
+@app.websocket("/ws/demo/{demo_id}")
+async def websocket_demo(websocket: WebSocket, demo_id: str, token: str = Query(default=None)):
+    if not token:
+        await websocket.close(code=4001, reason="Token required")
+        return
+    if token.startswith("mc_ak_"):
+        user = auth.verify_api_key(token)
+    else:
+        user = auth.verify_token(token)
+    if user is None:
+        await websocket.close(code=4001, reason="Invalid token")
+        return
+
+    await websocket.accept()
+    await _demo_runner.subscribe(websocket)
+    try:
+        while True:
+            try:
+                await asyncio.wait_for(websocket.receive_text(), timeout=30)
+            except asyncio.TimeoutError:
+                await websocket.send_json({"type": "ping"})
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        await _demo_runner.unsubscribe(websocket)
+
+
 # Robot cockpit WebSocket - streams at ~10hz
 _robot_ws_connections: list[WebSocket] = []
 

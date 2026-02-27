@@ -148,7 +148,7 @@ class BaseAgent:
         }
         self.logger.debug(f"Querying {model} @ {host}:{port}")
 
-        with httpx.Client(timeout=httpx.Timeout(300.0)) as client:
+        with httpx.Client(timeout=httpx.Timeout(600.0)) as client:
             response = client.post(url, json=payload)
             response.raise_for_status()
             result = response.json()
@@ -164,7 +164,7 @@ class BaseAgent:
         }
         self.logger.debug(f"Querying {model} @ {host}:{port} (async)")
 
-        async with httpx.AsyncClient(timeout=httpx.Timeout(300.0)) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(600.0)) as client:
             response = await client.post(url, json=payload)
             response.raise_for_status()
             result = response.json()
