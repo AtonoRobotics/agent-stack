@@ -1450,11 +1450,12 @@ function RobotDetailPage() {
     ),
 
     // Tabs
-    e(TabNav, { tabs: ['Overview', 'Telemetry', 'Simulations', 'Training', 'Safety', 'Deployments', 'ROS2'], active: activeTab, onChange: setActiveTab }),
+    e(TabNav, { tabs: ['Overview', 'Telemetry', 'Digital Twin', 'Simulations', 'Training', 'Safety', 'Deployments', 'ROS2'], active: activeTab, onChange: setActiveTab }),
 
     // Tab content
     activeTab === 'Overview' ? e(RobotOverviewTab, { robot: robot, robotId: robotId }) : null,
     activeTab === 'Telemetry' ? e(RobotTelemetryTab, { robot: robot, robotId: robotId }) : null,
+    activeTab === 'Digital Twin' ? e(RobotDigitalTwinTab, { robot: robot, robotId: robotId }) : null,
     activeTab === 'Simulations' ? e(RobotSimulationsTab, { robot: robot }) : null,
     activeTab === 'Training' ? e(RobotTrainingTab, { robot: robot }) : null,
     activeTab === 'Safety' ? e(RobotSafetyTab, { robot: robot }) : null,
@@ -2760,6 +2761,215 @@ function PayloadConfigPanel(props) {
     // Apply button
     e('button', { onClick: applyPayload, style: { width: '100%', padding: '10px', background: '#E8A020', color: '#0a0a0a', border: 'none', borderRadius: '4px', fontWeight: 700, fontSize: '12px', textTransform: 'uppercase', cursor: 'pointer', marginTop: '4px' } }, 'Apply to Simulation'),
     appliedMsg ? e('div', { style: { textAlign: 'center', color: '#4CAF50', fontSize: '12px', marginTop: '6px' } }, appliedMsg) : null
+  );
+}
+
+// ── Digital Twin Tab ─────────────────────────────────────
+function RobotDigitalTwinTab(props) {
+  var robotId = props.robotId || 'dobot_cr10';
+
+  var simStatusState = useState({ running: false, mode: 'STANDALONE', uptime: 0 });
+  var simStatus = simStatusState[0]; var setSimStatus = simStatusState[1];
+  var twinModeState = useState('STANDALONE');
+  var twinMode = twinModeState[0]; var setTwinMode = twinModeState[1];
+  var loadingState = useState(false);
+  var loading = loadingState[0]; var setLoading = loadingState[1];
+  var msgState = useState('');
+  var msg = msgState[0]; var setMsg = msgState[1];
+  var meshState = useState(null);
+  var meshes = meshState[0]; var setMeshes = meshState[1];
+
+  // Poll simulation status
+  useEffect(function() {
+    function fetchStatus() {
+      authFetch('/api/simulation/status').then(function(r) { return r.json(); }).then(setSimStatus).catch(function() {});
+    }
+    fetchStatus();
+    var interval = setInterval(fetchStatus, 3000);
+    return function() { clearInterval(interval); };
+  }, []);
+
+  // Fetch mesh info
+  useEffect(function() {
+    authFetch('/api/robot/' + robotId + '/meshes').then(function(r) { return r.json(); }).then(setMeshes).catch(function() {});
+  }, []);
+
+  function startSim() {
+    setLoading(true);
+    authFetch('/api/simulation/start', { method: 'POST' })
+      .then(function(r) { return r.json(); })
+      .then(function(d) { setMsg('Simulation started'); setLoading(false); })
+      .catch(function() { setMsg('Failed to start'); setLoading(false); });
+  }
+
+  function stopSim() {
+    setLoading(true);
+    authFetch('/api/simulation/stop', { method: 'POST' })
+      .then(function(r) { return r.json(); })
+      .then(function(d) { setMsg('Simulation stopped'); setLoading(false); })
+      .catch(function() { setMsg('Failed to stop'); setLoading(false); });
+  }
+
+  function changeTwinMode(newMode) {
+    setTwinMode(newMode);
+    authFetch('/api/robot/' + robotId + '/twin/mode', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: newMode })
+    }).then(function(r) { return r.json(); }).then(function(d) {
+      setMsg('Mode: ' + d.mode);
+      setTimeout(function() { setMsg(''); }, 2000);
+    }).catch(function() {});
+  }
+
+  function formatUptime(s) {
+    if (s < 60) return Math.round(s) + 's';
+    if (s < 3600) return Math.floor(s / 60) + 'm ' + Math.round(s % 60) + 's';
+    return Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm';
+  }
+
+  var modes = ['STANDALONE', 'MIRROR', 'SHADOW', 'COMMAND'];
+  var modeDescriptions = {
+    STANDALONE: 'Free simulation — no real robot connection',
+    MIRROR: 'Real robot drives the digital twin (read-only)',
+    SHADOW: 'Twin follows real robot with configurable delay',
+    COMMAND: 'Twin generates motion commands for real robot'
+  };
+
+  var cardStyle = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '16px' };
+  var headerStyle = { fontSize: '13px', fontWeight: 600, color: 'var(--accent)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' };
+  var labelStyle = { fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '4px' };
+  var valueStyle = { fontSize: '14px', fontFamily: 'var(--font-mono)', fontWeight: 500 };
+  var btnBase = { padding: '8px 16px', borderRadius: 'var(--radius-sm)', fontSize: '12px', fontWeight: 600, cursor: 'pointer', border: 'none', textTransform: 'uppercase' };
+
+  return e('div', { style: { display: 'flex', flexDirection: 'column', gap: '16px' } },
+
+    // ── Simulation Control Card ──
+    e('div', { style: cardStyle },
+      e('div', { style: headerStyle }, 'Isaac Sim Control'),
+      e('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '16px', marginBottom: '16px' } },
+        e('div', null,
+          e('div', { style: labelStyle }, 'Status'),
+          e('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+            e(StatusDot, { status: simStatus.running ? 'online' : 'offline' }),
+            e('span', { style: valueStyle }, simStatus.running ? 'Running' : 'Stopped')
+          )
+        ),
+        e('div', null,
+          e('div', { style: labelStyle }, 'Mode'),
+          e('div', { style: valueStyle }, simStatus.mode || 'N/A')
+        ),
+        e('div', null,
+          e('div', { style: labelStyle }, 'Uptime'),
+          e('div', { style: valueStyle }, simStatus.running ? formatUptime(simStatus.uptime) : '—')
+        ),
+        e('div', null,
+          e('div', { style: labelStyle }, 'PID'),
+          e('div', { style: Object.assign({}, valueStyle, { fontSize: '12px' }) }, simStatus.pid || '—')
+        )
+      ),
+      e('div', { style: { display: 'flex', gap: '8px', alignItems: 'center' } },
+        !simStatus.running
+          ? e('button', {
+              onClick: startSim, disabled: loading,
+              style: Object.assign({}, btnBase, { background: 'var(--success)', color: '#fff' })
+            }, loading ? 'Starting...' : 'Start Simulation')
+          : e('button', {
+              onClick: stopSim, disabled: loading,
+              style: Object.assign({}, btnBase, { background: 'var(--danger)', color: '#fff' })
+            }, loading ? 'Stopping...' : 'Stop Simulation'),
+        msg ? e('span', { style: { fontSize: '12px', color: 'var(--success)', marginLeft: '8px' } }, msg) : null
+      )
+    ),
+
+    // ── Twin Mode Selector Card ──
+    e('div', { style: cardStyle },
+      e('div', { style: headerStyle }, 'Digital Twin Mode'),
+      e('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px' } },
+        modes.map(function(m) {
+          var isActive = (simStatus.mode || twinMode) === m;
+          return e('button', {
+            key: m,
+            onClick: function() { changeTwinMode(m); },
+            style: Object.assign({}, btnBase, {
+              padding: '12px 8px',
+              background: isActive ? 'var(--accent)' : 'var(--raised)',
+              color: isActive ? '#0a0a0a' : 'var(--text)',
+              border: '1px solid ' + (isActive ? 'var(--accent)' : 'var(--border)'),
+              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px'
+            })
+          },
+            e('span', { style: { fontSize: '12px', fontWeight: 700 } }, m),
+            e('span', { style: { fontSize: '10px', fontWeight: 400, opacity: 0.7, textTransform: 'none' } }, modeDescriptions[m])
+          );
+        })
+      )
+    ),
+
+    // ── Twin Architecture Card ──
+    e('div', { style: cardStyle },
+      e('div', { style: headerStyle }, 'System Architecture'),
+      e('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' } },
+        // Real Robot
+        e('div', { style: { background: 'var(--raised)', borderRadius: 'var(--radius-sm)', padding: '12px', textAlign: 'center' } },
+          e('div', { style: { fontSize: '20px', marginBottom: '4px' } }, '\uD83E\uDD16'),
+          e('div', { style: { fontSize: '12px', fontWeight: 600 } }, 'Dobot CR10'),
+          e('div', { style: { fontSize: '10px', color: 'var(--text-secondary)', marginTop: '4px' } }, 'TCP/IP @ 192.168.5.1'),
+          e('div', { style: { fontSize: '10px', color: 'var(--text-secondary)' } }, 'Ports: 29999, 30003, 30004')
+        ),
+        // Sync Node
+        e('div', { style: { background: 'var(--raised)', borderRadius: 'var(--radius-sm)', padding: '12px', textAlign: 'center' } },
+          e('div', { style: { fontSize: '20px', marginBottom: '4px' } }, '\u21C4'),
+          e('div', { style: { fontSize: '12px', fontWeight: 600 } }, 'Twin Sync'),
+          e('div', { style: { fontSize: '10px', color: 'var(--text-secondary)', marginTop: '4px' } }, 'ROS2 \u2194 WebSocket'),
+          e('div', { style: { fontSize: '10px', color: 'var(--text-secondary)' } }, 'Mode: ' + (simStatus.mode || twinMode))
+        ),
+        // Isaac Sim
+        e('div', { style: { background: 'var(--raised)', borderRadius: 'var(--radius-sm)', padding: '12px', textAlign: 'center' } },
+          e('div', { style: { fontSize: '20px', marginBottom: '4px' } }, '\uD83C\uDFAC'),
+          e('div', { style: { fontSize: '12px', fontWeight: 600 } }, 'Isaac Sim 5.1'),
+          e('div', { style: { fontSize: '10px', color: 'var(--text-secondary)', marginTop: '4px' } }, 'Physics + Rendering'),
+          e('div', { style: { fontSize: '10px', color: 'var(--text-secondary)' } }, 'ws://localhost:8765')
+        )
+      )
+    ),
+
+    // ── Mesh Info Card ──
+    meshes ? e('div', { style: cardStyle },
+      e('div', { style: headerStyle }, 'Robot Meshes (' + meshes.length + ' links)'),
+      e('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '8px' } },
+        meshes.map(function(m) {
+          return e('div', { key: m.link_name, style: { background: 'var(--raised)', borderRadius: 'var(--radius-sm)', padding: '10px' } },
+            e('div', { style: { fontSize: '12px', fontWeight: 600, color: 'var(--accent)', marginBottom: '4px' } }, m.link_name),
+            e('div', { style: { fontSize: '10px', color: 'var(--text-secondary)' } }, 'Faces: ' + m.visual_face_count.toLocaleString() + ' visual / ' + m.collision_face_count + ' collision'),
+            e('div', { style: { fontSize: '10px', color: 'var(--text-secondary)' } },
+              'BBox: ' + (m.bounding_box.x * 1000).toFixed(0) + ' \u00D7 ' + (m.bounding_box.y * 1000).toFixed(0) + ' \u00D7 ' + (m.bounding_box.z * 1000).toFixed(0) + ' mm'),
+            e('div', { style: { fontSize: '10px', color: 'var(--text-secondary)' } }, 'Mass: ' + m.estimated_mass_kg.toFixed(1) + ' kg')
+          );
+        })
+      )
+    ) : null,
+
+    // ── Quick Actions Card ──
+    e('div', { style: cardStyle },
+      e('div', { style: headerStyle }, 'Quick Actions'),
+      e('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } },
+        e('button', { style: Object.assign({}, btnBase, { background: 'var(--raised)', border: '1px solid var(--border)' }),
+          onClick: function() {
+            authFetch('/api/simulation/start', { method: 'POST' }).catch(function() {});
+            setMsg('Launching full stack...');
+          }
+        }, 'Launch Full Stack'),
+        e('button', { style: Object.assign({}, btnBase, { background: 'var(--raised)', border: '1px solid var(--border)' }),
+          onClick: function() { changeTwinMode('MIRROR'); }
+        }, 'Start Mirror Mode'),
+        e('button', { style: Object.assign({}, btnBase, { background: 'var(--raised)', border: '1px solid var(--border)' }),
+          onClick: function() { changeTwinMode('STANDALONE'); }
+        }, 'Disconnect Twin'),
+        e('button', { style: Object.assign({}, btnBase, { background: 'var(--raised)', border: '1px solid var(--danger)' }),
+          onClick: stopSim
+        }, 'Emergency Stop Sim')
+      )
+    )
   );
 }
 
