@@ -2536,6 +2536,233 @@ function describeArc(cx, cy, r, startAngle, endAngle) {
   return 'M ' + x1 + ' ' + y1 + ' A ' + r + ' ' + r + ' 0 ' + largeArc + ' 1 ' + x2 + ' ' + y2;
 }
 
+// Payload Configuration Panel
+function PayloadConfigPanel(props) {
+  var onPayloadChange = props.onPayloadChange || function() {};
+  var camerasState = useState(null);
+  var cameras = camerasState[0]; var setCameras = camerasState[1];
+  var lensesState = useState(null);
+  var lenses = lensesState[0]; var setLenses = lensesState[1];
+  var accsState = useState(null);
+  var accs = accsState[0]; var setAccs = accsState[1];
+  var camState = useState('alexa_mini');
+  var selCam = camState[0]; var setSelCam = camState[1];
+  var lensState = useState('zeiss_mp_35');
+  var selLens = lensState[0]; var setSelLens = lensState[1];
+  var accState = useState(['preston_mdr4']);
+  var selAccs = accState[0]; var setSelAccs = accState[1];
+  var resultState = useState(null);
+  var result = resultState[0]; var setResult = resultState[1];
+  var presetsState = useState([]);
+  var presets = presetsState[0]; var setPresets = presetsState[1];
+  var presetState = useState(null);
+  var activePreset = presetState[0]; var setActivePreset = presetState[1];
+  var saveState = useState(false);
+  var showSave = saveState[0]; var setShowSave = saveState[1];
+  var nameState = useState('');
+  var saveName = nameState[0]; var setSaveName = nameState[1];
+  var appliedState = useState('');
+  var appliedMsg = appliedState[0]; var setAppliedMsg = appliedState[1];
+
+  // Fetch data on mount
+  useEffect(function() {
+    authFetch('/api/cameras').then(function(r) { return r.json(); }).then(setCameras).catch(function() {});
+    authFetch('/api/lenses').then(function(r) { return r.json(); }).then(setLenses).catch(function() {});
+    authFetch('/api/accessories').then(function(r) { return r.json(); }).then(setAccs).catch(function() {});
+    authFetch('/api/payload/presets').then(function(r) { return r.json(); }).then(setPresets).catch(function() {});
+  }, []);
+
+  // Recalculate payload when selection changes
+  useEffect(function() {
+    authFetch('/api/payload/calculate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ camera_id: selCam, lens_id: selLens, accessory_ids: selAccs })
+    }).then(function(r) { return r.json(); }).then(function(d) {
+      setResult(d);
+      if (cameras && lenses) {
+        var cam = cameras[selCam];
+        var lens = lenses[selLens];
+        if (cam && lens) {
+          onPayloadChange({
+            camera_name: cam.name, lens_name: lens.name,
+            dims_mm: cam.dims_mm, lens_length_mm: lens.length_mm,
+            lens_diameter_mm: lens.diameter_mm || 95, total_mass: d.total_mass_kg
+          });
+        }
+      }
+    }).catch(function() {});
+  }, [selCam, selLens, selAccs, cameras, lenses]);
+
+  function toggleAcc(id) {
+    setSelAccs(function(prev) {
+      return prev.indexOf(id) >= 0 ? prev.filter(function(a) { return a !== id; }) : prev.concat([id]);
+    });
+  }
+
+  function loadPreset(name) {
+    var p = presets.find(function(pr) { return pr.name === name; });
+    if (p) {
+      setSelCam(p.camera_id); setSelLens(p.lens_id); setSelAccs(p.accessory_ids);
+      setActivePreset(name);
+    }
+  }
+
+  function savePreset() {
+    if (!saveName) return;
+    authFetch('/api/payload/presets', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: saveName, camera_id: selCam, lens_id: selLens, accessory_ids: selAccs })
+    }).then(function(r) { return r.json(); }).then(function() {
+      authFetch('/api/payload/presets').then(function(r) { return r.json(); }).then(setPresets);
+      setSaveName(''); setShowSave(false); setActivePreset(saveName);
+    }).catch(function() {});
+  }
+
+  function applyPayload() {
+    authFetch('/api/payload/apply', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ camera_id: selCam, lens_id: selLens, accessory_ids: selAccs })
+    }).then(function() {
+      setAppliedMsg('Applied \u2713');
+      setTimeout(function() { setAppliedMsg(''); }, 2000);
+    }).catch(function() {});
+  }
+
+  if (!cameras || !lenses || !accs) {
+    return e('div', { style: { background: '#141414', border: '1px solid #2a2a2a', borderLeft: '3px solid #E8A020', borderRadius: '8px', padding: '16px', color: '#808080', fontSize: '12px' } }, 'Loading payload data...');
+  }
+
+  // Group items by manufacturer
+  function groupByMfr(items) {
+    var groups = {};
+    Object.keys(items).forEach(function(id) {
+      var mfr = items[id].manufacturer || 'Other';
+      if (!groups[mfr]) groups[mfr] = [];
+      groups[mfr].push({ id: id, data: items[id] });
+    });
+    return groups;
+  }
+
+  var camGroups = groupByMfr(cameras);
+  var lensGroups = groupByMfr(lenses);
+
+  var ss = { label: { fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1px', color: '#808080', marginBottom: '6px', display: 'block' } };
+  var selectStyle = { width: '100%', padding: '8px 12px', background: '#1a1a1a', border: '1px solid #333', borderRadius: '4px', color: '#e0e0e0', fontSize: '13px', outline: 'none' };
+
+  var massPct = result ? (result.total_mass_kg / 10) * 100 : 0;
+  var barColor = massPct < 80 ? '#4CAF50' : massPct < 95 ? '#E8A020' : '#f44336';
+
+  return e('div', { style: { background: '#141414', border: '1px solid #2a2a2a', borderLeft: '3px solid #E8A020', borderRadius: '8px', padding: '16px', overflow: 'auto', maxHeight: '100%' } },
+    e('div', { style: { fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px', color: '#E8A020', marginBottom: '16px' } }, 'PAYLOAD CONFIGURATION'),
+
+    // Camera selector
+    e('div', { style: { marginBottom: '12px' } },
+      e('label', { style: ss.label }, 'CAMERA BODY'),
+      e('select', { value: selCam, onChange: function(ev) { setSelCam(ev.target.value); setActivePreset(null); }, style: selectStyle },
+        Object.keys(camGroups).map(function(mfr) {
+          return e('optgroup', { key: mfr, label: mfr },
+            camGroups[mfr].map(function(item) {
+              return e('option', { key: item.id, value: item.id }, item.data.name + ' (' + item.data.mass_kg + 'kg)');
+            })
+          );
+        })
+      )
+    ),
+
+    // Lens selector
+    e('div', { style: { marginBottom: '12px' } },
+      e('label', { style: ss.label }, 'LENS'),
+      e('select', { value: selLens, onChange: function(ev) { setSelLens(ev.target.value); setActivePreset(null); }, style: selectStyle },
+        Object.keys(lensGroups).map(function(mfr) {
+          return e('optgroup', { key: mfr, label: mfr },
+            lensGroups[mfr].map(function(item) {
+              return e('option', { key: item.id, value: item.id }, item.data.name + ' (' + item.data.mass_kg + 'kg)');
+            })
+          );
+        })
+      )
+    ),
+
+    // Accessories
+    e('div', { style: { marginBottom: '12px' } },
+      e('label', { style: ss.label }, 'ACCESSORIES'),
+      Object.keys(accs).map(function(id) {
+        var a = accs[id];
+        return e('label', { key: id, style: { fontSize: '12px', color: '#b0b0b0', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px', cursor: 'pointer' } },
+          e('input', { type: 'checkbox', checked: selAccs.indexOf(id) >= 0, onChange: function() { toggleAcc(id); }, style: { accentColor: '#E8A020' } }),
+          a.name + ' (' + a.mass_kg + 'kg)'
+        );
+      })
+    ),
+
+    // Payload summary
+    result ? e('div', { style: { marginBottom: '12px', padding: '10px', background: '#0f0f0f', borderRadius: '4px' } },
+      e('label', { style: ss.label }, 'PAYLOAD SUMMARY'),
+      e('div', { style: { display: 'flex', justifyContent: 'space-between', fontSize: '13px', color: '#e0e0e0', marginBottom: '4px' } },
+        e('span', null, 'Total Mass: ' + result.total_mass_kg.toFixed(1) + ' kg'),
+        e('span', { style: { color: '#808080' } }, 'Limit: 10.0 kg')
+      ),
+      e('div', { style: { height: '6px', background: '#1a1a1a', borderRadius: '3px', overflow: 'hidden', marginBottom: '8px' } },
+        e('div', { style: { height: '100%', width: Math.min(massPct, 100) + '%', background: barColor, borderRadius: '3px', transition: 'width 300ms' } })
+      ),
+      e('div', { style: { fontSize: '12px', color: '#b0b0b0' } },
+        e('div', null, 'CoM Offset: X: ' + (result.com_offset_mm.x || 0).toFixed(1) + 'mm  Y: ' + (result.com_offset_mm.y || 0).toFixed(1) + 'mm  Z: ' + (result.com_offset_mm.z || 0).toFixed(1) + 'mm'),
+        e('div', { style: { marginTop: '4px', color: result.within_limits ? '#4CAF50' : '#f44336' } },
+          result.within_limits ? '\u2713 Within limits' : '\u2717 Exceeds limits')
+      )
+    ) : null,
+
+    // Joint torque margins
+    result && result.joint_torque_margins ? e('div', { style: { marginBottom: '12px' } },
+      e('label', { style: ss.label }, 'JOINT TORQUE MARGINS'),
+      ['J1', 'J2', 'J3', 'J4', 'J5', 'J6'].map(function(jn) {
+        var pct = result.joint_torque_margins[jn] || 0;
+        var jColor = pct < 80 ? '#4CAF50' : pct < 95 ? '#E8A020' : '#f44336';
+        var icon = pct < 80 ? '\u2713' : pct < 95 ? '\u26A0' : '\u2717';
+        return e('div', { key: jn, style: { display: 'flex', alignItems: 'center', marginBottom: '3px', fontSize: '11px' } },
+          e('span', { style: { width: '22px', color: '#808080' } }, jn),
+          e('div', { style: { flex: 1, height: '4px', background: '#1a1a1a', borderRadius: '2px', overflow: 'hidden', margin: '0 6px' } },
+            e('div', { style: { height: '100%', width: Math.min(pct, 100) + '%', background: jColor, borderRadius: '2px' } })
+          ),
+          e('span', { style: { width: '36px', textAlign: 'right', color: '#b0b0b0' } }, pct.toFixed(0) + '%'),
+          e('span', { style: { width: '16px', textAlign: 'center', color: jColor, marginLeft: '4px' } }, icon)
+        );
+      })
+    ) : null,
+
+    // Warnings
+    result && result.warnings && result.warnings.length > 0 ? e('div', { style: { marginBottom: '12px' } },
+      result.warnings.map(function(w, i) {
+        return e('div', { key: i, style: { fontSize: '11px', color: '#E8A020', marginBottom: '2px' } }, '\u26A0 ' + w);
+      })
+    ) : null,
+
+    // Presets
+    e('div', { style: { marginBottom: '12px' } },
+      e('label', { style: ss.label }, 'PRESETS'),
+      e('select', { value: activePreset || '', onChange: function(ev) { if (ev.target.value) loadPreset(ev.target.value); }, style: selectStyle },
+        e('option', { value: '' }, '-- Load Preset --'),
+        presets.map(function(p) {
+          return e('option', { key: p.name, value: p.name }, p.name);
+        })
+      ),
+      activePreset ? e('div', { style: { fontSize: '11px', color: '#E8A020', marginTop: '4px' } }, 'Active: ' + activePreset) : null,
+      e('div', { style: { display: 'flex', gap: '8px', marginTop: '8px' } },
+        e('button', { onClick: function() { setShowSave(!showSave); }, style: { flex: 1, padding: '6px', background: '#1a1a1a', border: '1px solid #333', borderRadius: '4px', color: '#b0b0b0', fontSize: '11px', cursor: 'pointer' } }, 'Save as Preset')
+      ),
+      showSave ? e('div', { style: { display: 'flex', gap: '6px', marginTop: '8px' } },
+        e('input', { type: 'text', value: saveName, onChange: function(ev) { setSaveName(ev.target.value); }, placeholder: 'Preset name', style: { flex: 1, padding: '6px', background: '#1a1a1a', border: '1px solid #333', borderRadius: '4px', color: '#e0e0e0', fontSize: '12px', outline: 'none' } }),
+        e('button', { onClick: savePreset, style: { padding: '6px 12px', background: '#E8A020', color: '#0a0a0a', border: 'none', borderRadius: '4px', fontSize: '11px', fontWeight: 700, cursor: 'pointer' } }, 'Save'),
+        e('button', { onClick: function() { setShowSave(false); }, style: { padding: '6px 8px', background: '#333', color: '#b0b0b0', border: 'none', borderRadius: '4px', fontSize: '11px', cursor: 'pointer' } }, '\u2717')
+      ) : null
+    ),
+
+    // Apply button
+    e('button', { onClick: applyPayload, style: { width: '100%', padding: '10px', background: '#E8A020', color: '#0a0a0a', border: 'none', borderRadius: '4px', fontWeight: 700, fontSize: '12px', textTransform: 'uppercase', cursor: 'pointer', marginTop: '4px' } }, 'Apply to Simulation'),
+    appliedMsg ? e('div', { style: { textAlign: 'center', color: '#4CAF50', fontSize: '12px', marginTop: '6px' } }, appliedMsg) : null
+  );
+}
+
 // Joint States Card with 6 arc gauges
 function JointStatesCard(props) {
   var joints = props.joints || [];
@@ -2669,34 +2896,90 @@ function CockpitDiagnosticsCard(props) {
   );
 }
 
-// Three.js 3D Robot Viewer
+// Three.js 3D Robot Viewer — loads actual CR10 STL meshes with FK chain
 function ThreeJSViewer(props) {
   var containerRef = useRef(null);
   var sceneRef = useRef(null);
-  var cameraRef = useRef(null);
   var rendererRef = useRef(null);
-  var jointMeshesRef = useRef([]);
+  var jointGroupsRef = useRef([]);
+  var targetAnglesRef = useRef([0, 0, 0, 0, 0, 0]);
   var frameRef = useRef(null);
+  var workspaceRef = useRef(null);
+  var axesRef = useRef(null);
+  var cameraPayloadRef = useRef(null);
 
-  var viewState = useState('front');
+  var loadState = useState(true);
+  var loading = loadState[0];
+  var setLoading = loadState[1];
+  var loadMsgState = useState('Loading CR10 meshes...');
+  var loadMsg = loadMsgState[0];
+  var setLoadMsg = loadMsgState[1];
+  var viewState = useState('home');
   var currentView = viewState[0];
   var setCurrentView = viewState[1];
+  var wsState = useState(true);
+  var showWorkspace = wsState[0];
+  var setShowWorkspace = wsState[1];
+  var axState = useState(true);
+  var showAxesToggle = axState[0];
+  var setShowAxesToggle = axState[1];
 
   var online = props.online;
   var joints = props.joints || [];
-  var urdfChain = props.urdfChain || [];
+  var cameraPayload = props.cameraPayload;
 
-  // Initialize Three.js scene
+  // CR10 URDF joint configs
+  var JOINTS = [
+    { origin: [0, 0, 0.1765], axis: 'z' },   // J1 base rotation
+    { origin: [0, 0.0055, 0], axis: 'y' },    // J2 shoulder
+    { origin: [0, 0, 0.607], axis: 'y' },     // J3 elbow
+    { origin: [0, 0, 0.568], axis: 'x' },     // J4 wrist 1
+    { origin: [0, 0, 0.191], axis: 'y' },     // J5 wrist 2
+    { origin: [0, 0, 0.125], axis: 'x' },     // J6 flange
+  ];
+
+  // Binary STL parser
+  function parseSTLBinary(buffer) {
+    var dv = new DataView(buffer);
+    var offset = 80;
+    var triCount = dv.getUint32(offset, true);
+    offset += 4;
+    var positions = new Float32Array(triCount * 9);
+    var normals = new Float32Array(triCount * 9);
+    for (var i = 0; i < triCount; i++) {
+      var nx = dv.getFloat32(offset, true);
+      var ny = dv.getFloat32(offset + 4, true);
+      var nz = dv.getFloat32(offset + 8, true);
+      offset += 12;
+      for (var j = 0; j < 3; j++) {
+        var idx = i * 9 + j * 3;
+        positions[idx] = dv.getFloat32(offset, true);
+        positions[idx + 1] = dv.getFloat32(offset + 4, true);
+        positions[idx + 2] = dv.getFloat32(offset + 8, true);
+        normals[idx] = nx; normals[idx + 1] = ny; normals[idx + 2] = nz;
+        offset += 12;
+      }
+      offset += 2;
+    }
+    var geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geom.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+    return geom;
+  }
+
+  // Initialize scene once
   useEffect(function() {
     if (!containerRef.current || typeof THREE === 'undefined') return;
-
     var container = containerRef.current;
     var w = container.clientWidth;
     var h = container.clientHeight;
 
-    // Check WebGL support before proceeding
-    try { var _testCanvas = document.createElement('canvas'); var _gl = _testCanvas.getContext('webgl') || _testCanvas.getContext('experimental-webgl'); if (!_gl) throw new Error('No WebGL'); } catch(_e) {
-      container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#808080;font-size:12px;text-align:center;padding:20px;">3D Viewer requires WebGL<br><span style="font-size:10px;color:#555;">Your browser does not support WebGL rendering</span></div>';
+    try {
+      var tc = document.createElement('canvas');
+      var gl = tc.getContext('webgl') || tc.getContext('experimental-webgl');
+      if (!gl) throw new Error('No WebGL');
+    } catch(ex) {
+      container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#808080;">3D requires WebGL</div>';
       return;
     }
 
@@ -2710,9 +2993,6 @@ function ThreeJSViewer(props) {
 
     // Camera
     var camera = new THREE.PerspectiveCamera(45, w / h, 0.1, 100);
-    camera.position.set(2, 1.5, 2);
-    camera.lookAt(0, 0.6, 0);
-    cameraRef.current = camera;
 
     // Renderer
     var renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -2723,135 +3003,202 @@ function ThreeJSViewer(props) {
     rendererRef.current = renderer;
 
     // Lights
-    var ambientLight = new THREE.AmbientLight(0x404040, 0.8);
-    scene.add(ambientLight);
-    var dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
-    dirLight.position.set(3, 5, 3);
+    scene.add(new THREE.AmbientLight(0x404040, 0.5));
+    var dirLight = new THREE.DirectionalLight(0xFFFFFF, 0.8);
+    dirLight.position.set(5, 10, 5);
     dirLight.castShadow = true;
     scene.add(dirLight);
     var rimLight = new THREE.DirectionalLight(0xE8A020, 0.3);
     rimLight.position.set(-2, 3, -2);
     scene.add(rimLight);
 
-    // Grid
-    var gridHelper = new THREE.GridHelper(4, 20, 0x2E2E2E, 0x1A1A1A);
-    scene.add(gridHelper);
-
-    // Axis indicator
+    // Grid & Axes
+    scene.add(new THREE.GridHelper(4, 20, 0x2E2E2E, 0x1A1A1A));
     var axesHelper = new THREE.AxesHelper(0.3);
     axesHelper.position.set(-1.5, 0, -1.5);
     scene.add(axesHelper);
+    axesRef.current = axesHelper;
 
-    // Build robot from URDF kinematic chain
-    var meshes = [];
-    var baseMat = new THREE.MeshPhongMaterial({ color: 0x555555, specular: 0x333333, shininess: 60 });
-    var jointMat = new THREE.MeshPhongMaterial({ color: 0xE8A020, specular: 0xFFCC00, shininess: 80 });
-    var accentMat = new THREE.MeshPhongMaterial({ color: 0x4CAF50, specular: 0x66FF66, shininess: 60 });
+    // Workspace sphere at J1 height
+    var wsSphereGeom = new THREE.SphereGeometry(1.3, 32, 16);
+    var wsSphereMat = new THREE.MeshBasicMaterial({ color: 0xE8A020, wireframe: true, transparent: true, opacity: 0.05 });
+    var wsSphere = new THREE.Mesh(wsSphereGeom, wsSphereMat);
+    wsSphere.position.set(0, 0.1765, 0);
+    scene.add(wsSphere);
+    workspaceRef.current = wsSphere;
 
-    // Base
-    var baseGeom = new THREE.CylinderGeometry(0.12, 0.14, 0.08, 32);
-    var baseMesh = new THREE.Mesh(baseGeom, baseMat);
-    baseMesh.position.set(0, 0.04, 0);
-    baseMesh.castShadow = true;
-    scene.add(baseMesh);
+    // Materials
+    var linkMat = new THREE.MeshPhongMaterial({ color: 0x2A2A2A, specular: 0x444444, shininess: 30 });
+    var baseMat = new THREE.MeshPhongMaterial({ color: 0xE8A020, emissive: 0x4A3000, shininess: 60 });
+    var eeMat = new THREE.MeshPhongMaterial({ color: 0xE8A020, emissive: 0x6A4000, shininess: 80 });
+    var matMap = [baseMat, linkMat, linkMat, linkMat, linkMat, linkMat, eeMat];
 
-    // CR10 link lengths from URDF
-    var linkDefs = [
-      { height: 0.1765, radius: 0.06 },  // base to J1
-      { height: 0.10, radius: 0.055 },     // J1 shoulder
-      { height: 0.607, radius: 0.045 },    // J2 upper arm
-      { height: 0.568, radius: 0.04 },     // J3 forearm
-      { height: 0.191, radius: 0.035 },    // J4 wrist 1
-      { height: 0.125, radius: 0.03 },     // J5 wrist 2
-      { height: 0.1084, radius: 0.025 },   // J6 flange
-    ];
+    // Root group: convert URDF Z-up to Three.js Y-up
+    var rootGroup = new THREE.Group();
+    rootGroup.rotation.x = -Math.PI / 2;
+    scene.add(rootGroup);
 
-    var cumY = 0.08;
-    for (var i = 0; i < linkDefs.length; i++) {
-      var ld = linkDefs[i];
+    var jointGroups = [];
 
-      // Joint sphere
-      var jointGeom = new THREE.SphereGeometry(ld.radius * 1.3, 16, 16);
-      var jMesh = new THREE.Mesh(jointGeom, i < linkDefs.length - 1 ? jointMat : accentMat);
-      jMesh.position.set(0, cumY, 0);
-      jMesh.castShadow = true;
-      scene.add(jMesh);
-      meshes.push(jMesh);
+    // Fallback: cylinder primitives if STL loading fails
+    function buildFallbackRobot() {
+      var linkDefs = [
+        { h: 0.08, r: 0.12 },
+        { h: 0.10, r: 0.055 }, { h: 0.607, r: 0.045 },
+        { h: 0.568, r: 0.04 }, { h: 0.191, r: 0.035 },
+        { h: 0.125, r: 0.03 }, { h: 0.1084, r: 0.025 },
+      ];
+      // Base cylinder
+      var baseGeom = new THREE.CylinderGeometry(0.12, 0.14, 0.08, 32);
+      var baseCyl = new THREE.Mesh(baseGeom, baseMat);
+      baseCyl.rotation.x = Math.PI / 2;
+      baseCyl.position.set(0, 0, 0.04);
+      rootGroup.add(baseCyl);
 
-      // Link cylinder
-      var linkGeom = new THREE.CylinderGeometry(ld.radius, ld.radius, ld.height, 16);
-      var linkMesh = new THREE.Mesh(linkGeom, baseMat);
-      linkMesh.position.set(0, cumY + ld.height / 2, 0);
-      linkMesh.castShadow = true;
-      scene.add(linkMesh);
-
-      cumY += ld.height;
+      var parent = rootGroup;
+      for (var i = 0; i < JOINTS.length; i++) {
+        var jg = new THREE.Group();
+        jg.position.set(JOINTS[i].origin[0], JOINTS[i].origin[1], JOINTS[i].origin[2]);
+        parent.add(jg);
+        jointGroups.push(jg);
+        var cyl = new THREE.CylinderGeometry(linkDefs[i + 1].r, linkDefs[i + 1].r, linkDefs[i + 1].h, 16);
+        var mesh = new THREE.Mesh(cyl, matMap[i + 1]);
+        mesh.rotation.x = Math.PI / 2;
+        mesh.position.set(0, 0, linkDefs[i + 1].h / 2);
+        jg.add(mesh);
+        parent = jg;
+      }
+      jointGroupsRef.current = jointGroups;
     }
 
-    // End effector indicator
-    var eeGeom = new THREE.ConeGeometry(0.02, 0.06, 8);
-    var eeMesh = new THREE.Mesh(eeGeom, accentMat);
-    eeMesh.position.set(0, cumY + 0.03, 0);
-    eeMesh.rotation.x = Math.PI;
-    scene.add(eeMesh);
+    // Build kinematic chain from loaded STL geometries
+    function buildKinematicChain(meshList, geometries) {
+      var linkNames = ['base_link', 'link_1', 'link_2', 'link_3', 'link_4', 'link_5', 'link_6'];
+      if (geometries.base_link) {
+        var bm = new THREE.Mesh(geometries.base_link, matMap[0]);
+        rootGroup.add(bm);
+      }
+      var parent = rootGroup;
+      for (var i = 0; i < JOINTS.length; i++) {
+        var jg = new THREE.Group();
+        jg.position.set(JOINTS[i].origin[0], JOINTS[i].origin[1], JOINTS[i].origin[2]);
+        parent.add(jg);
+        jointGroups.push(jg);
+        var linkName = linkNames[i + 1];
+        if (geometries[linkName]) {
+          var lm = new THREE.Mesh(geometries[linkName], matMap[i + 1]);
+          jg.add(lm);
+        }
+        parent = jg;
+      }
+      jointGroupsRef.current = jointGroups;
+      // End effector cone
+      var eeGeom = new THREE.ConeGeometry(0.015, 0.04, 8);
+      var eeCone = new THREE.Mesh(eeGeom, eeMat);
+      eeCone.position.set(0, 0, 0.06);
+      parent.add(eeCone);
+    }
 
-    jointMeshesRef.current = meshes;
+    // Load STL meshes
+    (function loadMeshes() {
+      authFetch('/api/robot/dobot_cr10/meshes')
+        .then(function(r) { return r.json(); })
+        .then(function(meshList) {
+          setLoadMsg('Loading STL files... 0/' + meshList.length);
+          var loaded = 0;
+          var meshGeometries = {};
+          function loadNext(idx) {
+            if (idx >= meshList.length) {
+              buildKinematicChain(meshList, meshGeometries);
+              setLoading(false);
+              return;
+            }
+            var m = meshList[idx];
+            authFetch('/static/meshes/' + m.visual_path)
+              .then(function(r) { return r.arrayBuffer(); })
+              .then(function(buf) {
+                meshGeometries[m.link_name] = parseSTLBinary(buf);
+                loaded++;
+                setLoadMsg('Loading STL files... ' + loaded + '/' + meshList.length);
+                loadNext(idx + 1);
+              })
+              .catch(function(err) {
+                console.error('Failed to load ' + m.visual_path, err);
+                loaded++;
+                loadNext(idx + 1);
+              });
+          }
+          loadNext(0);
+        })
+        .catch(function(err) {
+          console.error('Mesh metadata fetch failed, using fallback', err);
+          setLoadMsg('Using fallback geometry...');
+          buildFallbackRobot();
+          setLoading(false);
+        });
+    })();
 
-    // Orbit-like controls via mouse
+    // Orbit controls
     var isDragging = false;
-    var previousMousePosition = { x: 0, y: 0 };
+    var prevMouse = { x: 0, y: 0 };
     var spherical = { theta: Math.PI / 4, phi: Math.PI / 4, radius: 3 };
-
-    function updateCameraFromSpherical() {
+    function updateCam() {
       camera.position.x = spherical.radius * Math.sin(spherical.phi) * Math.cos(spherical.theta);
       camera.position.y = spherical.radius * Math.cos(spherical.phi);
       camera.position.z = spherical.radius * Math.sin(spherical.phi) * Math.sin(spherical.theta);
-      camera.lookAt(0, 0.6, 0);
+      camera.lookAt(0, 0.5, 0);
     }
-    updateCameraFromSpherical();
+    updateCam();
+    container._spherical = spherical;
+    container._updateCamera = updateCam;
 
-    function onMouseDown(ev) { isDragging = true; previousMousePosition = { x: ev.clientX, y: ev.clientY }; }
-    function onMouseUp() { isDragging = false; }
-    function onMouseMove(ev) {
+    function onDown(ev) { isDragging = true; prevMouse = { x: ev.clientX, y: ev.clientY }; }
+    function onUp() { isDragging = false; }
+    function onMove(ev) {
       if (!isDragging) return;
-      var dx = ev.clientX - previousMousePosition.x;
-      var dy = ev.clientY - previousMousePosition.y;
+      var dx = ev.clientX - prevMouse.x;
+      var dy = ev.clientY - prevMouse.y;
       spherical.theta -= dx * 0.005;
       spherical.phi = Math.max(0.1, Math.min(Math.PI - 0.1, spherical.phi + dy * 0.005));
-      updateCameraFromSpherical();
-      previousMousePosition = { x: ev.clientX, y: ev.clientY };
+      updateCam();
+      prevMouse = { x: ev.clientX, y: ev.clientY };
     }
     function onWheel(ev) {
-      spherical.radius = Math.max(1, Math.min(8, spherical.radius + ev.deltaY * 0.005));
-      updateCameraFromSpherical();
+      ev.preventDefault();
+      spherical.radius = Math.max(0.3, Math.min(5, spherical.radius + ev.deltaY * 0.003));
+      updateCam();
     }
+    renderer.domElement.addEventListener('mousedown', onDown);
+    renderer.domElement.addEventListener('mouseup', onUp);
+    renderer.domElement.addEventListener('mousemove', onMove);
+    renderer.domElement.addEventListener('wheel', onWheel, { passive: false });
 
-    renderer.domElement.addEventListener('mousedown', onMouseDown);
-    renderer.domElement.addEventListener('mouseup', onMouseUp);
-    renderer.domElement.addEventListener('mousemove', onMouseMove);
-    renderer.domElement.addEventListener('wheel', onWheel);
-
-    // Store spherical for preset views
-    containerRef.current._spherical = spherical;
-    containerRef.current._updateCamera = updateCameraFromSpherical;
-
-    // Animation loop
-    function animate() {
+    // Render loop (30fps cap)
+    var lastTime = 0;
+    function animate(time) {
       frameRef.current = requestAnimationFrame(animate);
-      // Subtle joint pulse animation
-      var t = Date.now() * 0.001;
-      for (var j = 0; j < meshes.length; j++) {
-        var sc = 1 + 0.03 * Math.sin(t * 2 + j);
-        meshes[j].scale.set(sc, sc, sc);
+      if (document.hidden) return;
+      if (time - lastTime < 33) return;
+      lastTime = time;
+      // Lerp joint angles
+      var jgs = jointGroupsRef.current;
+      var targets = targetAnglesRef.current;
+      for (var j = 0; j < jgs.length; j++) {
+        var target = (targets[j] || 0) * Math.PI / 180;
+        var ax = JOINTS[j].axis;
+        if (ax === 'z') { jgs[j].rotation.z += (target - jgs[j].rotation.z) * 0.15; }
+        else if (ax === 'y') { jgs[j].rotation.y += (target - jgs[j].rotation.y) * 0.15; }
+        else if (ax === 'x') { jgs[j].rotation.x += (target - jgs[j].rotation.x) * 0.15; }
       }
       renderer.render(scene, camera);
     }
-    animate();
+    animate(0);
 
     // Resize
     function onResize() {
       var nw = container.clientWidth;
       var nh = container.clientHeight;
+      if (nw === 0 || nh === 0) return;
       camera.aspect = nw / nh;
       camera.updateProjectionMatrix();
       renderer.setSize(nw, nh);
@@ -2860,42 +3207,92 @@ function ThreeJSViewer(props) {
 
     return function() {
       window.removeEventListener('resize', onResize);
-      renderer.domElement.removeEventListener('mousedown', onMouseDown);
-      renderer.domElement.removeEventListener('mouseup', onMouseUp);
-      renderer.domElement.removeEventListener('mousemove', onMouseMove);
+      renderer.domElement.removeEventListener('mousedown', onDown);
+      renderer.domElement.removeEventListener('mouseup', onUp);
+      renderer.domElement.removeEventListener('mousemove', onMove);
       renderer.domElement.removeEventListener('wheel', onWheel);
       if (frameRef.current) cancelAnimationFrame(frameRef.current);
       if (renderer.domElement.parentNode) container.removeChild(renderer.domElement);
+      scene.traverse(function(obj) {
+        if (obj.geometry) obj.geometry.dispose();
+        if (obj.material) {
+          if (Array.isArray(obj.material)) obj.material.forEach(function(m) { m.dispose(); });
+          else obj.material.dispose();
+        }
+      });
       renderer.dispose();
     };
 
     } catch(_webglErr) {
-      container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#808080;font-size:12px;text-align:center;padding:20px;">3D Viewer Error<br><span style="font-size:10px;color:#555;">' + _webglErr.message + '</span></div>';
+      container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#808080;font-size:12px;text-align:center;padding:20px;">3D Error<br><span style="font-size:10px;color:#555;">' + _webglErr.message + '</span></div>';
       return;
     }
   }, []);
 
-  // Update joint colors based on live data
+  // Update target joint angles from props
   useEffect(function() {
-    var meshes = jointMeshesRef.current;
-    if (!meshes.length || typeof THREE === 'undefined') return;
-    for (var i = 0; i < Math.min(joints.length, meshes.length); i++) {
-      var vel = Math.abs(joints[i].velocity || 0);
-      if (vel > 0.5) {
-        meshes[i].material = new THREE.MeshPhongMaterial({ color: 0xFF9800, emissive: 0x442200, specular: 0xFFCC00, shininess: 80 });
-      }
+    if (!joints.length) return;
+    var angles = [];
+    for (var i = 0; i < 6; i++) {
+      angles.push(joints[i] ? (joints[i].position || 0) : 0);
     }
+    targetAnglesRef.current = angles;
   }, [joints]);
+
+  // Toggle workspace visibility
+  useEffect(function() {
+    if (workspaceRef.current) workspaceRef.current.visible = showWorkspace;
+  }, [showWorkspace]);
+
+  // Toggle axes visibility
+  useEffect(function() {
+    if (axesRef.current) axesRef.current.visible = showAxesToggle;
+  }, [showAxesToggle]);
+
+  // Camera payload visualization at end effector
+  useEffect(function() {
+    if (cameraPayloadRef.current) {
+      var old = cameraPayloadRef.current;
+      if (old.parent) old.parent.remove(old);
+      old.traverse(function(c) { if (c.geometry) c.geometry.dispose(); if (c.material) c.material.dispose(); });
+      cameraPayloadRef.current = null;
+    }
+    if (!cameraPayload || !jointGroupsRef.current.length) return;
+    var eeGroup = jointGroupsRef.current[jointGroupsRef.current.length - 1];
+    var payloadGroup = new THREE.Group();
+    payloadGroup.position.set(0, 0, 0.11);
+    // Camera body
+    var cw = (cameraPayload.dims_mm ? cameraPayload.dims_mm.w : 114) / 1000;
+    var ch = (cameraPayload.dims_mm ? cameraPayload.dims_mm.h : 58) / 1000;
+    var cl = (cameraPayload.dims_mm ? cameraPayload.dims_mm.l : 130) / 1000;
+    var camGeom = new THREE.BoxGeometry(cw, ch, cl);
+    var camMat = new THREE.MeshPhongMaterial({ color: 0x1A3A5A, specular: 0x333366, shininess: 40 });
+    var camMesh = new THREE.Mesh(camGeom, camMat);
+    camMesh.position.set(0, 0, cl / 2);
+    payloadGroup.add(camMesh);
+    // Lens
+    var ll = (cameraPayload.lens_length_mm || 128) / 1000;
+    var ld = (cameraPayload.lens_diameter_mm || 95) / 1000;
+    var lensGeom = new THREE.CylinderGeometry(ld / 2, ld / 2, ll, 16);
+    var lensMat = new THREE.MeshPhongMaterial({ color: 0x2A2A2A, specular: 0x333333, shininess: 30 });
+    var lensMesh = new THREE.Mesh(lensGeom, lensMat);
+    lensMesh.rotation.x = Math.PI / 2;
+    lensMesh.position.set(0, 0, cl + ll / 2);
+    payloadGroup.add(lensMesh);
+    eeGroup.add(payloadGroup);
+    cameraPayloadRef.current = payloadGroup;
+  }, [cameraPayload]);
 
   function setView(name) {
     setCurrentView(name);
     var sp = containerRef.current && containerRef.current._spherical;
     var upd = containerRef.current && containerRef.current._updateCamera;
     if (!sp || !upd) return;
-    if (name === 'front') { sp.theta = 0; sp.phi = Math.PI / 3; sp.radius = 3; }
+    if (name === 'home') { sp.theta = Math.PI / 4; sp.phi = Math.PI / 4; sp.radius = 3; }
+    else if (name === 'front') { sp.theta = 0; sp.phi = Math.PI / 3; sp.radius = 3; }
     else if (name === 'side') { sp.theta = Math.PI / 2; sp.phi = Math.PI / 3; sp.radius = 3; }
     else if (name === 'top') { sp.theta = 0; sp.phi = 0.15; sp.radius = 3.5; }
-    else if (name === 'iso') { sp.theta = Math.PI / 4; sp.phi = Math.PI / 4; sp.radius = 3; }
+    else if (name === 'iso') { sp.theta = Math.PI / 5; sp.phi = Math.PI / 5; sp.radius = 2.5; }
     upd();
   }
 
@@ -2903,15 +3300,114 @@ function ThreeJSViewer(props) {
     !online ? e('div', { className: 'threejs-viewer__offline' },
       e('div', { className: 'threejs-viewer__offline-text' }, 'ROBOT OFFLINE')
     ) : null,
+    loading ? e('div', { style: { position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', color: '#E8A020', textAlign: 'center', zIndex: 10 } },
+      e('div', { style: { fontSize: '32px', animation: 'pulse 2s infinite' } }, '\u03B1'),
+      e('div', { style: { fontSize: '12px', color: '#808080', marginTop: '8px' } }, loadMsg)
+    ) : null,
     e('div', { className: 'threejs-viewer__overlay' },
-      ['front', 'side', 'top', 'iso'].map(function(v) {
+      ['home', 'front', 'side', 'top', 'iso'].map(function(v) {
         return e('button', {
           key: v,
           className: 'threejs-viewer__btn' + (currentView === v ? ' threejs-viewer__btn--active' : ''),
           onClick: function() { setView(v); }
-        }, v.toUpperCase());
+        }, v === 'home' ? '\u2299' : v.toUpperCase());
       })
+    ),
+    e('div', { style: { position: 'absolute', bottom: '8px', right: '8px', display: 'flex', flexDirection: 'column', gap: '4px', zIndex: 10 } },
+      e('label', { style: { fontSize: '10px', color: '#808080', cursor: 'pointer', display: 'flex', alignItems: 'center' } },
+        e('input', { type: 'checkbox', checked: showWorkspace, onChange: function() { setShowWorkspace(function(p) { return !p; }); }, style: { marginRight: '4px' } }), 'Workspace'),
+      e('label', { style: { fontSize: '10px', color: '#808080', cursor: 'pointer', display: 'flex', alignItems: 'center' } },
+        e('input', { type: 'checkbox', checked: showAxesToggle, onChange: function() { setShowAxesToggle(function(p) { return !p; }); }, style: { marginRight: '4px' } }), 'Axes')
     )
+  );
+}
+
+// Simulation Mode Panel
+function SimulationModePanel() {
+  var stState = useState({ running: false, mode: 'STANDALONE', uptime: 0, pid: null });
+  var simStatus = stState[0]; var setSimStatus = stState[1];
+
+  function fetchStatus() {
+    authFetch('/api/simulation/status')
+      .then(function(r) { return r.json(); })
+      .then(setSimStatus)
+      .catch(function() {});
+  }
+
+  useEffect(function() {
+    fetchStatus();
+    var iv = setInterval(fetchStatus, 3000);
+    return function() { clearInterval(iv); };
+  }, []);
+
+  function changeMode(mode) {
+    authFetch('/api/robot/dobot_cr10/twin/mode', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: mode })
+    }).then(function() { fetchStatus(); }).catch(function() {});
+  }
+
+  function toggleSim() {
+    var endpoint = simStatus.running ? '/api/simulation/stop' : '/api/simulation/start';
+    authFetch(endpoint, { method: 'POST' }).then(function() { fetchStatus(); }).catch(function() {});
+  }
+
+  var modeDescs = {
+    STANDALONE: 'Simulation running independently',
+    MIRROR: 'Mirroring real robot joint states',
+    SHADOW: 'Predicting motion 500ms ahead',
+    COMMAND: 'Simulation commanding real robot'
+  };
+
+  var upStr = '';
+  if (simStatus.running && simStatus.uptime) {
+    var m = Math.floor(simStatus.uptime / 60);
+    var s = Math.floor(simStatus.uptime % 60);
+    upStr = m + 'm ' + s + 's';
+  }
+
+  var ss = { label: { fontSize: '10px', textTransform: 'uppercase', letterSpacing: '1px', color: '#808080' } };
+
+  return e('div', { style: { background: '#141414', border: '1px solid #2a2a2a', borderLeft: '3px solid #E8A020', borderRadius: '8px', padding: '16px' } },
+    e('div', { style: { fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px', color: '#E8A020', marginBottom: '12px' } }, 'SIMULATION MODE'),
+
+    // Mode buttons
+    e('div', { style: { display: 'flex', gap: '6px', marginBottom: '8px' } },
+      ['STANDALONE', 'MIRROR', 'SHADOW', 'COMMAND'].map(function(mode) {
+        var active = simStatus.mode === mode;
+        return e('button', {
+          key: mode, onClick: function() { changeMode(mode); },
+          style: { flex: 1, padding: '8px 4px', borderRadius: '4px', fontSize: '10px', fontWeight: 700,
+            textTransform: 'uppercase', cursor: 'pointer', border: active ? 'none' : '1px solid #333',
+            background: active ? '#E8A020' : '#1a1a1a', color: active ? '#0a0a0a' : '#808080', transition: 'all 150ms' }
+        }, mode);
+      })
+    ),
+
+    // Mode description
+    e('div', { style: { fontSize: '11px', color: '#808080', marginBottom: '12px' } }, modeDescs[simStatus.mode] || ''),
+
+    // Status indicators
+    e('div', { style: { display: 'flex', gap: '16px', marginBottom: '12px', fontSize: '11px' } },
+      e('div', { style: { display: 'flex', alignItems: 'center', gap: '4px' } },
+        e('span', { style: { display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: simStatus.running ? '#4CAF50' : '#555' } }),
+        e('span', { style: { color: simStatus.running ? '#4CAF50' : '#808080' } }, simStatus.running ? 'RUNNING' : 'STOPPED')
+      ),
+      e('div', { style: { display: 'flex', alignItems: 'center', gap: '4px' } },
+        e('span', { style: { display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#555' } }),
+        e('span', { style: { color: '#808080' } }, 'OFFLINE')
+      ),
+      upStr ? e('div', { style: { color: '#b0b0b0' } }, 'Uptime: ' + upStr) : null
+    ),
+
+    // Start/Stop button
+    e('button', {
+      onClick: toggleSim,
+      style: { width: '100%', padding: '10px', fontWeight: 700, fontSize: '12px', textTransform: 'uppercase',
+        border: 'none', borderRadius: '4px', cursor: 'pointer',
+        background: simStatus.running ? '#f44336' : '#E8A020',
+        color: simStatus.running ? '#fff' : '#0a0a0a' }
+    }, simStatus.running ? '\u25A0 Stop Simulation' : '\u25B6 Start Simulation')
   );
 }
 
@@ -3175,6 +3671,10 @@ function CockpitPage() {
   var showNodePanel = nodePanelState[0];
   var setShowNodePanel = nodePanelState[1];
 
+  var payloadState = useState(null);
+  var cameraPayload = payloadState[0];
+  var setCameraPayload = payloadState[1];
+
   // Fetch URDF once
   useEffect(function() {
     authFetch('/api/robot/' + robotId + '/urdf')
@@ -3250,8 +3750,18 @@ function CockpitPage() {
 
     // Row 1: 3D viewer + Joint gauges
     e('div', { className: 'cockpit-grid', style: { gridTemplateColumns: '1.5fr 1fr' } },
-      e(ThreeJSViewer, { online: online, joints: status.joints, urdfChain: urdfChain }),
+      e(ThreeJSViewer, { online: online, joints: status.joints, urdfChain: urdfChain, cameraPayload: cameraPayload }),
       e(JointStatesCard, { joints: status.joints, urdfChain: urdfChain })
+    ),
+
+    // Row 1.5: Payload configuration
+    e('div', { className: 'cockpit-grid', style: { gridTemplateColumns: '1fr' } },
+      e(PayloadConfigPanel, { onPayloadChange: setCameraPayload })
+    ),
+
+    // Simulation mode panel
+    e('div', { className: 'cockpit-grid', style: { gridTemplateColumns: '1fr' } },
+      e(SimulationModePanel, null)
     ),
 
     // Row 2: Mode + End Effector + Velocity

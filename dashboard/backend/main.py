@@ -460,6 +460,26 @@ class DataSourceRequest(BaseModel):
     source: str
 
 
+class PayloadCalculateRequest(BaseModel):
+    camera_id: str
+    lens_id: str
+    accessory_ids: list[str] = []
+
+
+class PresetSaveRequest(BaseModel):
+    name: str
+    camera_id: str
+    lens_id: str
+    accessory_ids: list[str] = []
+
+
+class PayloadApplyRequest(BaseModel):
+    preset_name: str | None = None
+    camera_id: str | None = None
+    lens_id: str | None = None
+    accessory_ids: list[str] | None = None
+
+
 @app.post("/api/robot/{robot_id}/tcp/connect")
 async def tcp_connect(robot_id: str, user: dict = Depends(require_operator)):
     from dashboard.backend.robot_status import init_tcp_driver, get_tcp_connection_status
@@ -528,6 +548,144 @@ async def get_telemetry(robot_id: str, samples: int = Query(default=100), user: 
         return {"frames": [], "count": 0}
     history = driver.get_feedback_history(n=samples)
     return {"frames": history, "count": len(history)}
+
+
+# ── Camera / Payload routes ───────────────────────────────
+
+@app.get("/api/cameras")
+async def api_get_cameras(user: dict = Depends(require_auth)):
+    from dashboard.backend.camera_database import get_cameras
+    return get_cameras()
+
+
+@app.get("/api/lenses")
+async def api_get_lenses(user: dict = Depends(require_auth)):
+    from dashboard.backend.camera_database import get_lenses
+    return get_lenses()
+
+
+@app.get("/api/accessories")
+async def api_get_accessories(user: dict = Depends(require_auth)):
+    from dashboard.backend.camera_database import get_accessories
+    return get_accessories()
+
+
+@app.post("/api/payload/calculate")
+async def api_payload_calculate(req: PayloadCalculateRequest, user: dict = Depends(require_auth)):
+    from dashboard.backend.camera_database import calculate_payload
+    try:
+        return calculate_payload(req.camera_id, req.lens_id, req.accessory_ids)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/payload/presets")
+async def api_get_presets(user: dict = Depends(require_auth)):
+    from dashboard.backend.camera_database import list_presets
+    return list_presets()
+
+
+@app.post("/api/payload/presets")
+async def api_save_preset(req: PresetSaveRequest, user: dict = Depends(require_operator)):
+    from dashboard.backend.camera_database import save_preset
+    save_preset(req.name, req.camera_id, req.lens_id, req.accessory_ids)
+    return {"ok": True, "name": req.name}
+
+
+@app.delete("/api/payload/presets/{name}")
+async def api_delete_preset(name: str, user: dict = Depends(require_operator)):
+    from dashboard.backend.camera_database import delete_preset
+    if not delete_preset(name):
+        raise HTTPException(status_code=404, detail="Preset not found")
+    return {"ok": True}
+
+
+@app.post("/api/payload/apply")
+async def api_payload_apply(req: PayloadApplyRequest, user: dict = Depends(require_operator)):
+    from dashboard.backend.camera_database import load_preset, calculate_payload
+    if req.preset_name:
+        preset = load_preset(req.preset_name)
+        if not preset:
+            raise HTTPException(status_code=404, detail="Preset not found")
+        camera_id = preset["camera_id"]
+        lens_id = preset["lens_id"]
+        accessory_ids = preset["accessory_ids"]
+    elif req.camera_id and req.lens_id:
+        camera_id = req.camera_id
+        lens_id = req.lens_id
+        accessory_ids = req.accessory_ids or []
+    else:
+        raise HTTPException(status_code=400, detail="Provide preset_name or camera_id+lens_id")
+    try:
+        result = calculate_payload(camera_id, lens_id, accessory_ids)
+        result["applied"] = True
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+# ── Mesh routes ───────────────────────────────────────────
+
+@app.get("/api/robot/{robot_id}/meshes")
+async def get_robot_meshes(robot_id: str, user: dict = Depends(get_current_user)):
+    """Return mesh metadata for a robot."""
+    if robot_id != "dobot_cr10":
+        raise HTTPException(status_code=404, detail="Robot not found")
+    metadata_path = Path.home() / "dobot-cr10-stack" / "meshes" / "metadata.json"
+    if not metadata_path.exists():
+        raise HTTPException(status_code=404, detail="Mesh metadata not found. Run tools/mesh_pipeline.py first.")
+    with open(metadata_path) as f:
+        return json.load(f)
+
+
+# ── Simulation control routes ─────────────────────────────
+
+import time as _time
+
+_sim_state = {
+    "running": False,
+    "mode": "STANDALONE",
+    "start_time": None,
+    "pid": None,
+}
+
+class SimModeRequest(BaseModel):
+    mode: str
+
+@app.post("/api/simulation/start")
+async def start_simulation(user: dict = Depends(require_operator)):
+    if _sim_state["running"]:
+        raise HTTPException(status_code=409, detail="Simulation is already running")
+    _sim_state["running"] = True
+    _sim_state["start_time"] = _time.time()
+    return {"status": "started", "mode": _sim_state["mode"], "pid": _sim_state["pid"]}
+
+@app.post("/api/simulation/stop")
+async def stop_simulation(user: dict = Depends(require_operator)):
+    if not _sim_state["running"]:
+        raise HTTPException(status_code=409, detail="Simulation is not running")
+    _sim_state["running"] = False
+    _sim_state["start_time"] = None
+    return {"status": "stopped"}
+
+@app.get("/api/simulation/status")
+async def get_simulation_status(user: dict = Depends(get_current_user)):
+    uptime = _time.time() - _sim_state["start_time"] if _sim_state["running"] and _sim_state["start_time"] else 0.0
+    return {
+        "running": _sim_state["running"],
+        "mode": _sim_state["mode"],
+        "uptime": round(uptime, 1),
+        "pid": _sim_state["pid"],
+    }
+
+@app.post("/api/robot/{robot_id}/twin/mode")
+async def set_twin_mode(robot_id: str, req: SimModeRequest, user: dict = Depends(require_operator)):
+    valid_modes = ["STANDALONE", "MIRROR", "SHADOW", "COMMAND"]
+    if req.mode not in valid_modes:
+        raise HTTPException(status_code=400, detail="Invalid mode. Must be one of: " + ", ".join(valid_modes))
+    previous = _sim_state["mode"]
+    _sim_state["mode"] = req.mode
+    return {"mode": req.mode, "previous": previous}
 
 
 # ── Demo routes ───────────────────────────────────────────
@@ -745,6 +903,11 @@ async def serve_frontend():
         return FileResponse(index_path)
     return JSONResponse({"error": "Frontend not found. Place index.html in dashboard/frontend/"}, status_code=404)
 
+
+# Serve robot meshes (STL files)
+_meshes_dir = Path.home() / "dobot-cr10-stack" / "meshes"
+if _meshes_dir.exists():
+    app.mount("/static/meshes", StaticFiles(directory=str(_meshes_dir)), name="meshes")
 
 if os.path.exists(FRONTEND_DIR):
     app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
