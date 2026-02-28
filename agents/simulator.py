@@ -9,6 +9,7 @@ import sys
 import re
 import subprocess
 import yaml
+import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
 
@@ -109,7 +110,7 @@ class SimulatorAgent(BaseAgent):
     def _fix_urdf_limits(self, error_log: str) -> bool:
         """Fix missing URDF joint limits by adding sensible defaults.
 
-        Parses the error to find the joint name, then adds default limits.
+        Uses xml.etree.ElementTree for safe XML parsing instead of string manipulation.
         """
         self.logger.info("Auto-fix: URDF joint limit missing - adding defaults")
         self.log_activity("auto_fix", "Adding default URDF joint limits")
@@ -120,40 +121,57 @@ class SimulatorAgent(BaseAgent):
 
         # Extract URDF file path from error
         urdf_match = re.search(r'(?:file|urdf)[:\s]+["\']?([^\s"\']+\.urdf)', error_log, re.IGNORECASE)
-        if urdf_match:
-            urdf_path = urdf_match.group(1)
-            if os.path.exists(urdf_path):
-                with open(urdf_path, "r") as f:
-                    content = f.read()
-
-                # Check approval since we're modifying a URDF
-                if "modify_urdf" in self.APPROVAL_REQUIRED:
-                    approved = self.ask_approval(
-                        action="modify_urdf",
-                        details=f"Add default limits to joint '{joint_name}' in {urdf_path}",
-                    )
-                    if not approved:
-                        self.logger.warning("URDF modification denied")
-                        return False
-
-                # Add default joint limits if missing
-                default_limit = '<limit lower="-3.14159" upper="3.14159" effort="100" velocity="1.0"/>'
-                if f'name="{joint_name}"' in content and "<limit" not in content.split(f'name="{joint_name}"')[1].split("</joint>")[0]:
-                    content = content.replace(
-                        f'name="{joint_name}"',
-                        f'name="{joint_name}">\n    {default_limit}\n    <placeholder',
-                    )
-                    # This is a simplified fix; real implementation would use XML parsing
-                    self.logger.info(f"Added default limits to joint {joint_name}")
-
-                self.log_activity("auto_fix", f"Added default limits to joint {joint_name}")
-                return True
-            else:
-                self.logger.warning(f"URDF file not found: {urdf_path}")
-                return False
-        else:
+        if not urdf_match:
             self.logger.warning("Could not find URDF file path in error log")
             return False
+
+        urdf_path = urdf_match.group(1)
+        if not os.path.exists(urdf_path):
+            self.logger.warning(f"URDF file not found: {urdf_path}")
+            return False
+
+        # Check approval since we're modifying a URDF
+        if "modify_urdf" in self.APPROVAL_REQUIRED:
+            approved = self.ask_approval(
+                action="modify_urdf",
+                details=f"Add default limits to joint '{joint_name}' in {urdf_path}",
+            )
+            if not approved:
+                self.logger.warning("URDF modification denied")
+                return False
+
+        # Parse URDF as XML
+        tree = ET.parse(urdf_path)
+        root = tree.getroot()
+
+        # Find the joint element by name
+        joint_elem = None
+        for joint in root.iter("joint"):
+            if joint.get("name") == joint_name:
+                joint_elem = joint
+                break
+
+        if joint_elem is None:
+            self.logger.warning(f"Joint '{joint_name}' not found in URDF")
+            return False
+
+        # Check if limit already exists
+        if joint_elem.find("limit") is not None:
+            self.logger.info(f"Joint '{joint_name}' already has limits")
+            return True
+
+        # Add default limit element
+        limit_elem = ET.SubElement(joint_elem, "limit")
+        limit_elem.set("lower", "-3.14159")
+        limit_elem.set("upper", "3.14159")
+        limit_elem.set("effort", "100")
+        limit_elem.set("velocity", "1.0")
+
+        ET.indent(root)
+        tree.write(urdf_path, xml_declaration=True, encoding="unicode")
+        self.logger.info(f"Added default limits to joint {joint_name}")
+        self.log_activity("auto_fix", f"Added default limits to joint {joint_name}")
+        return True
 
     def _fix_ik_fail(self, error_log: str) -> bool:
         """Fix cuRobo IK failures by adjusting solver seeds and tolerances.
