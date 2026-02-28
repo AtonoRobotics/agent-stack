@@ -10,7 +10,7 @@ from typing import Optional
 
 
 URDF_PATH = os.path.expanduser(
-    "~/Downloads/TCP-IP-ROS-6AXis-main/dobot_description/urdf/cr10_robot.urdf"
+    "~/dobot_cr10/cr10_robot.urdf"
 )
 
 

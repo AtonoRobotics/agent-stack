@@ -108,7 +108,7 @@ LINK_NAME_MAP = {
 def run_pipeline(input_dir=None, output_base=None):
     """Process all CR10 STL files and generate metadata."""
     if input_dir is None:
-        input_dir = Path('/home/samuel/Downloads/TCP-IP-ROS-6AXis-main/dobot_description/meshes/cr10/')
+        input_dir = Path(os.path.expanduser('~/dobot_cr10/meshes/'))
     else:
         input_dir = Path(input_dir)
 
