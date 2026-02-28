@@ -62,10 +62,23 @@ def collect_machine(name, config):
         if gpu_out:
             parts = [x.strip() for x in gpu_out.split(",")]
             if len(parts) >= 4:
-                metrics["gpu_util"] = float(parts[0])
-                metrics["gpu_vram_used"] = float(parts[1]) / 1024
-                metrics["gpu_vram_total"] = float(parts[2]) / 1024
-                metrics["temp_c"] = float(parts[3])
+                def safe_float(v):
+                    try:
+                        return float(v)
+                    except (ValueError, TypeError):
+                        return None
+                gpu_val = safe_float(parts[0])
+                vram_used = safe_float(parts[1])
+                vram_total = safe_float(parts[2])
+                temp_val = safe_float(parts[3])
+                if gpu_val is not None:
+                    metrics["gpu_util"] = gpu_val
+                if vram_used is not None:
+                    metrics["gpu_vram_used"] = vram_used / 1024
+                if vram_total is not None:
+                    metrics["gpu_vram_total"] = vram_total / 1024
+                if temp_val is not None:
+                    metrics["temp_c"] = temp_val
 
         ram_out = ssh_cmd(user, host, "free -b | grep Mem")
         if ram_out:

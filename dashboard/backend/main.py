@@ -9,6 +9,7 @@ import sys
 import json
 import asyncio
 import sqlite3
+import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -116,6 +117,13 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+# ── Orchestrator routes (webhook triggers, event monitoring) ──
+try:
+    from orchestrator.sources.webhooks import router as orchestrator_router
+    app.include_router(orchestrator_router)
+except ImportError:
+    pass  # Orchestrator not installed
 
 
 async def db_query(sql: str, params: tuple = ()) -> list[dict]:
@@ -278,9 +286,15 @@ async def get_fleet_machine(machine: str, hours: int = Query(default=24), user: 
 
 @app.get("/api/robots")
 async def get_robots(user: dict = Depends(require_auth)):
-    repos_config = load_yaml("repos.yml").get("robots", {})
+    robots = await db_query("SELECT * FROM robots ORDER BY name")
+    if not robots:
+        # Fallback to repos.yml for backwards compat
+        repos_config = load_yaml("repos.yml").get("robots", {})
+        for robot_id, repo_name in repos_config.items():
+            robots.append({"id": robot_id, "name": robot_id, "type": "arm", "status": "active"})
     result = []
-    for robot_id, repo_name in repos_config.items():
+    for robot in robots:
+        robot_id = robot["id"]
         deployment = await db_query_one("SELECT * FROM deployment_history WHERE robot_serial = ? ORDER BY id DESC LIMIT 1", (robot_id,))
         sim = await db_query_one("SELECT * FROM simulation_runs WHERE robot = ? ORDER BY id DESC LIMIT 1", (robot_id,))
         metrics = await db_query(
@@ -288,7 +302,20 @@ async def get_robots(user: dict = Depends(require_auth)):
             (robot_id, robot_id),
         )
         result.append({
-            "id": robot_id, "repo": repo_name, "latest_deployment": deployment,
+            "id": robot_id,
+            "name": robot.get("name", robot_id),
+            "type": robot.get("type", "arm"),
+            "dof": robot.get("dof", 6),
+            "max_payload_kg": robot.get("max_payload_kg"),
+            "reach_mm": robot.get("reach_mm"),
+            "serial": robot.get("serial", ""),
+            "status": robot.get("status", "active"),
+            "urdf_path": robot.get("urdf_path", ""),
+            "mesh_dir": robot.get("mesh_dir", ""),
+            "tcp_host": robot.get("tcp_host", ""),
+            "tcp_ports": robot.get("tcp_ports", ""),
+            "data_source": robot.get("data_source", "ros2"),
+            "latest_deployment": deployment,
             "latest_simulation": sim,
             "metrics": {m["metric_name"]: {"value": m["value"], "units": m["units"]} for m in metrics},
         })
@@ -297,13 +324,34 @@ async def get_robots(user: dict = Depends(require_auth)):
 
 @app.get("/api/robots/{robot_id}")
 async def get_robot_detail(robot_id: str, user: dict = Depends(require_auth)):
-    repos_config = load_yaml("repos.yml").get("robots", {})
+    robot = await db_query_one("SELECT * FROM robots WHERE id = ?", (robot_id,))
+    if not robot:
+        robot = {"id": robot_id, "name": robot_id}
     deployments = await db_query("SELECT * FROM deployment_history WHERE robot_serial = ? ORDER BY id DESC LIMIT 20", (robot_id,))
     sims = await db_query("SELECT * FROM simulation_runs WHERE robot = ? ORDER BY id DESC LIMIT 50", (robot_id,))
     training = await db_query("SELECT * FROM training_runs WHERE robot = ? ORDER BY id DESC LIMIT 20", (robot_id,))
     metrics = await db_query("SELECT * FROM performance_metrics WHERE robot_serial = ? ORDER BY id DESC LIMIT 100", (robot_id,))
     incidents = await db_query("SELECT * FROM incidents WHERE robot_serial = ? ORDER BY id DESC LIMIT 20", (robot_id,))
-    return {"id": robot_id, "repo": repos_config.get(robot_id, ""), "deployments": deployments, "simulations": sims, "training": training, "metrics": metrics, "incidents": incidents}
+    return {
+        "id": robot_id,
+        "name": robot.get("name", robot_id),
+        "type": robot.get("type", "arm"),
+        "dof": robot.get("dof", 6),
+        "max_payload_kg": robot.get("max_payload_kg"),
+        "reach_mm": robot.get("reach_mm"),
+        "serial": robot.get("serial", ""),
+        "status": robot.get("status", "active"),
+        "urdf_path": robot.get("urdf_path", ""),
+        "mesh_dir": robot.get("mesh_dir", ""),
+        "tcp_host": robot.get("tcp_host", ""),
+        "tcp_ports": robot.get("tcp_ports", ""),
+        "data_source": robot.get("data_source", "ros2"),
+        "deployments": deployments,
+        "simulations": sims,
+        "training": training,
+        "metrics": metrics,
+        "incidents": incidents,
+    }
 
 
 @app.get("/api/simulations")
@@ -371,6 +419,57 @@ async def get_agents(user: dict = Depends(require_auth)):
             agent_stats[agent]["success"] += 1
         if t.get("tokens_saved"):
             agent_stats[agent]["local"] += 1
+
+    # Orchestrator data
+    orchestrator = {"events": [], "stats": {"total": 0, "by_status": {}, "active_agents": 0}, "service_active": False}
+    try:
+        events = await db_query(
+            "SELECT id, source, event_type, priority, timestamp, payload, status, assigned_agents, messages, result, created_at, completed_at "
+            "FROM orchestrator_events ORDER BY id DESC LIMIT 30"
+        )
+        import json as _json
+        for evt in events:
+            for key in ("assigned_agents", "messages", "payload"):
+                if isinstance(evt.get(key), str):
+                    try:
+                        evt[key] = _json.loads(evt[key])
+                    except (ValueError, TypeError):
+                        pass
+        orchestrator["events"] = events
+
+        status_rows = await db_query(
+            "SELECT status, COUNT(*) as count FROM orchestrator_events GROUP BY status"
+        )
+        by_status = {row["status"]: row["count"] for row in status_rows}
+        total_events = sum(by_status.values())
+
+        active_rows = await db_query(
+            "SELECT COUNT(DISTINCT assigned_agents) as count FROM orchestrator_events "
+            "WHERE status IN ('pending', 'in_progress', 'processing') AND assigned_agents IS NOT NULL AND assigned_agents != ''"
+        )
+        active_agents = active_rows[0]["count"] if active_rows else 0
+
+        orchestrator["stats"] = {
+            "total": total_events,
+            "by_status": by_status,
+            "active_agents": active_agents,
+        }
+    except Exception:
+        pass  # Table may not exist yet; return empty orchestrator data
+
+    # Check if orchestrator service is running
+    try:
+        result = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: subprocess.run(
+                ["systemctl", "--user", "is-active", "agent-orchestrator.service"],
+                capture_output=True, text=True, timeout=5,
+            ),
+        )
+        orchestrator["service_active"] = result.stdout.strip() == "active"
+    except Exception:
+        orchestrator["service_active"] = False
+
     return {
         "tasks": tasks,
         "stats": {
@@ -380,6 +479,7 @@ async def get_agents(user: dict = Depends(require_auth)):
             "cost_savings_pct": (local_tasks / total * 100) if total > 0 else 0,
         },
         "per_agent": agent_stats,
+        "orchestrator": orchestrator,
     }
 
 

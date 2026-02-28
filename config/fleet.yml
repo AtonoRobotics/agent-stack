@@ -18,7 +18,7 @@ machines:
     roles: [inference, training, cosmos]
   agx-thor:
     user: samuel
-    host: alpha-agx-thor
+    host: thor.tailcc41cb.ts.net
     os: JetPack 7.1
     arch: ARM64
     gpu: 60GB unified

@@ -27,12 +27,16 @@ except ImportError:
     HAS_RICH = False
 
 
+SAFE_AUTO_ACTIONS = {"restart_ollama", "clean_tmp"}
+
+
 class MonitorAgent(BaseAgent):
     task_type = "monitoring"
     CHECK_INTERVAL = 60  # seconds
 
-    def __init__(self):
+    def __init__(self, daemon_mode=False):
         super().__init__(self.task_type)
+        self.daemon_mode = daemon_mode
         with open(os.path.join(CONFIG_DIR, "alerts.yml")) as f:
             self.thresholds = yaml.safe_load(f)["thresholds"]
         # Ensure fleet_health table
@@ -214,13 +218,16 @@ class MonitorAgent(BaseAgent):
         self.log_activity("alert", message, machine=machine, level=severity)
 
     def _auto_clean_tmp(self, machine_name: str):
-        """Auto-fix: clean /tmp on a machine. Requires approval."""
-        # In daemon mode (systemd), ask_approval returns False (EOFError → denied)
-        approved = self.ask_approval(
-            action="clean_tmp",
-            details=f"Delete /tmp files older than 7 days on {machine_name}",
-            machine=machine_name,
-        )
+        """Auto-fix: clean /tmp on a machine. Auto-approved in daemon mode."""
+        if self.daemon_mode and "clean_tmp" in SAFE_AUTO_ACTIONS:
+            approved = True
+            self.logger.info(f"Auto-approved (daemon): clean /tmp on {machine_name}")
+        else:
+            approved = self.ask_approval(
+                action="clean_tmp",
+                details=f"Delete /tmp files older than 7 days on {machine_name}",
+                machine=machine_name,
+            )
         if not approved:
             self.logger.info(f"Auto-fix denied: clean /tmp on {machine_name}")
             self.log_activity("auto_fix_denied", f"Denied /tmp cleanup on {machine_name}", machine=machine_name)
@@ -238,13 +245,16 @@ class MonitorAgent(BaseAgent):
         self.log_activity("auto_fix", f"Cleaned /tmp on {machine_name}", machine=machine_name)
 
     def _auto_restart_ollama(self, machine_name: str):
-        """Auto-fix: restart Ollama service. Requires approval."""
-        # In daemon mode (systemd), ask_approval returns False (EOFError → denied)
-        approved = self.ask_approval(
-            action="restart_ollama",
-            details=f"Restart Ollama service on {machine_name}",
-            machine=machine_name,
-        )
+        """Auto-fix: restart Ollama service. Auto-approved in daemon mode."""
+        if self.daemon_mode and "restart_ollama" in SAFE_AUTO_ACTIONS:
+            approved = True
+            self.logger.info(f"Auto-approved (daemon): restart Ollama on {machine_name}")
+        else:
+            approved = self.ask_approval(
+                action="restart_ollama",
+                details=f"Restart Ollama service on {machine_name}",
+                machine=machine_name,
+            )
         if not approved:
             self.logger.info(f"Auto-fix denied: restart Ollama on {machine_name}")
             self.log_activity("auto_fix_denied", f"Denied Ollama restart on {machine_name}", machine=machine_name)
@@ -286,5 +296,5 @@ class MonitorAgent(BaseAgent):
 
 
 if __name__ == "__main__":
-    monitor = MonitorAgent()
+    monitor = MonitorAgent(daemon_mode=True)
     monitor.run_forever()
