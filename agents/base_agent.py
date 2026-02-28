@@ -6,11 +6,12 @@
 
 import os
 import sys
+import time
 import yaml
 import json
+import atexit
 import logging
 import sqlite3
-import asyncio
 from datetime import datetime
 from pathlib import Path
 
@@ -27,6 +28,30 @@ LOGS_DIR = os.path.join(BASE_DIR, "logs")
 KNOWLEDGE_DIR = os.path.join(BASE_DIR, "knowledge")
 DB_PATH = os.path.join(DATA_DIR, "metrics.db")
 
+# ── Module-level caches ──────────────────────────────────────────────────
+
+_config_cache: dict = {}
+_knowledge_cache: dict = {}
+_http_client: httpx.Client | None = None
+
+
+def _load_config(filename: str) -> dict:
+    """Load a YAML config file, caching the result."""
+    if filename not in _config_cache:
+        path = os.path.join(CONFIG_DIR, filename)
+        with open(path) as f:
+            _config_cache[filename] = yaml.safe_load(f)
+    return _config_cache[filename]
+
+
+def _get_http_client() -> httpx.Client:
+    """Return a shared httpx client (lazy init, 60s timeout)."""
+    global _http_client
+    if _http_client is None:
+        _http_client = httpx.Client(timeout=httpx.Timeout(60.0))
+        atexit.register(_http_client.close)
+    return _http_client
+
 
 class BaseAgent:
     """Base class for all agents in the stack."""
@@ -35,17 +60,13 @@ class BaseAgent:
         self.agent_type = agent_type
         self.start_time = datetime.now()
 
-        # Load configs
-        with open(os.path.join(CONFIG_DIR, "models.yml")) as f:
-            _full_config = yaml.safe_load(f)
-            self.models_config = _full_config["models"]
-            self.policy = _full_config.get("policy", {})
-        with open(os.path.join(CONFIG_DIR, "fleet.yml")) as f:
-            self.fleet_config = yaml.safe_load(f)["machines"]
-        with open(os.path.join(CONFIG_DIR, "alerts.yml")) as f:
-            self.alerts_config = yaml.safe_load(f)["thresholds"]
-        with open(os.path.join(CONFIG_DIR, "resources.yml")) as f:
-            self.resources_config = yaml.safe_load(f)["limits"]
+        # Load configs (cached at module level)
+        _full_config = _load_config("models.yml")
+        self.models_config = _full_config["models"]
+        self.policy = _full_config.get("policy", {})
+        self.fleet_config = _load_config("fleet.yml")["machines"]
+        self.alerts_config = _load_config("alerts.yml")["thresholds"]
+        self.resources_config = _load_config("resources.yml")["limits"]
 
         # Setup logging
         os.makedirs(LOGS_DIR, exist_ok=True)
@@ -62,40 +83,51 @@ class BaseAgent:
             self.logger.addHandler(fh)
             self.logger.addHandler(ch)
 
-        # Initialize database
+        # Persistent DB connection (WAL mode allows concurrent readers)
         os.makedirs(DATA_DIR, exist_ok=True)
+        self._db = sqlite3.connect(DB_PATH)
+        self._db.execute("PRAGMA journal_mode=WAL")
         self._init_db()
 
         self.logger.info(f"{agent_type} agent initialized")
 
     def _init_db(self):
         """Ensure database and tables exist."""
-        conn = sqlite3.connect(DB_PATH)
-        # Create agent_tasks and performance_metrics tables (the ones this base class writes to)
-        conn.execute("""CREATE TABLE IF NOT EXISTS agent_tasks (
+        self._db.execute("""CREATE TABLE IF NOT EXISTS agent_tasks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             agent TEXT, task TEXT, started TEXT, completed TEXT,
             model_used TEXT, success INTEGER, tokens_saved INTEGER,
             retries INTEGER, notes TEXT
         )""")
-        conn.execute("""CREATE TABLE IF NOT EXISTS performance_metrics (
+        self._db.execute("""CREATE TABLE IF NOT EXISTS performance_metrics (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             robot_serial TEXT, timestamp TEXT, metric_name TEXT,
             value REAL, units TEXT, source TEXT
         )""")
-        conn.execute("""CREATE TABLE IF NOT EXISTS activity_log (
+        self._db.execute("""CREATE TABLE IF NOT EXISTS activity_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp TEXT, category TEXT, machine TEXT, robot TEXT,
             agent TEXT, message TEXT, level TEXT
         )""")
-        conn.commit()
-        conn.close()
+        self._db.commit()
+
+    def close(self):
+        """Close the persistent DB connection."""
+        if self._db:
+            self._db.close()
+            self._db = None
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def load_knowledge(self, task_type: str) -> str:
-        """Load relevant knowledge base files for a task type.
+        """Load relevant knowledge base files for a task type (cached)."""
+        if task_type in _knowledge_cache:
+            return _knowledge_cache[task_type]
 
-        Maps task types to knowledge directories/files and returns combined context.
-        """
         knowledge_map = {
             "code_generation": ["software/", "lessons_learned/"],
             "research": ["hardware/", "software/", "workflows/"],
@@ -132,12 +164,14 @@ class BaseAgent:
                 except Exception:
                     pass
 
-        return "\n\n".join(combined) if combined else ""
+        result = "\n\n".join(combined) if combined else ""
+        _knowledge_cache[task_type] = result
+        return result
 
     def query_ollama(self, prompt: str, model: str, host: str, port: int) -> str:
         """Send a query to an Ollama instance and return the response.
 
-        Uses synchronous httpx for simplicity in agent context.
+        Uses a shared httpx client with 60s timeout.
         POST to http://host:port/api/generate with stream=false.
         """
         url = f"http://{host}:{port}/api/generate"
@@ -148,33 +182,18 @@ class BaseAgent:
         }
         self.logger.debug(f"Querying {model} @ {host}:{port}")
 
-        with httpx.Client(timeout=httpx.Timeout(600.0)) as client:
-            response = client.post(url, json=payload)
-            response.raise_for_status()
-            result = response.json()
-            return result.get("response", "")
-
-    async def query_ollama_async(self, prompt: str, model: str, host: str, port: int) -> str:
-        """Async version of query_ollama."""
-        url = f"http://{host}:{port}/api/generate"
-        payload = {
-            "model": model,
-            "prompt": prompt,
-            "stream": False,
-        }
-        self.logger.debug(f"Querying {model} @ {host}:{port} (async)")
-
-        async with httpx.AsyncClient(timeout=httpx.Timeout(600.0)) as client:
-            response = await client.post(url, json=payload)
-            response.raise_for_status()
-            result = response.json()
-            return result.get("response", "")
+        client = _get_http_client()
+        response = client.post(url, json=payload)
+        response.raise_for_status()
+        result = response.json()
+        return result.get("response", "")
 
     def query_with_retry(self, prompt: str, task_type: str = None) -> str:
-        """Query the appropriate model with retry logic.
+        """Query the appropriate model with retry logic and exponential backoff.
 
         Gets model config for the task_type (or self.agent_type).
-        Tries up to 3 times. On 3 failures, logs and raises exception.
+        Tries up to 3 times with 1s, 2s, 4s backoff.
+        On 3 failures, logs and raises exception.
         Never falls back to Claude API automatically.
         """
         task_type = task_type or self.agent_type
@@ -206,6 +225,12 @@ class BaseAgent:
             except Exception as e:
                 last_error = f"Error: {e}"
                 self.logger.warning(f"Attempt {attempt}: {last_error}")
+
+            # Exponential backoff: 1s, 2s, 4s (skip after last attempt)
+            if attempt < 3:
+                delay = 2 ** (attempt - 1)
+                self.logger.debug(f"Backing off {delay}s before retry")
+                time.sleep(delay)
 
         error_msg = f"All 3 attempts failed for {model} @ {host}. Last error: {last_error}"
         self.logger.error(error_msg)
@@ -243,7 +268,6 @@ class BaseAgent:
                     level="WARNING",
                 )
                 self.logger.warning(f"API escalation approved for {task_type} -> {fallback_model}")
-                # Re-raise so caller can handle API fallback
                 raise RuntimeError(f"API_ESCALATION_APPROVED:{fallback_model}:{error_msg}")
             else:
                 self.log_activity(
@@ -260,6 +284,7 @@ class BaseAgent:
 
         Prints a formatted approval request to the terminal.
         Returns True if user types 'y' or 'yes', False otherwise.
+        In daemon mode (no terminal), EOFError returns False.
         """
         print()
         print("┌─ APPROVAL REQUIRED ─────────────────────────┐")
@@ -288,8 +313,7 @@ class BaseAgent:
                  tokens_saved: bool = True, retries: int = 0):
         """Log a task execution to the agent_tasks table."""
         now = datetime.now().isoformat()
-        conn = sqlite3.connect(DB_PATH)
-        conn.execute(
+        self._db.execute(
             """INSERT INTO agent_tasks (agent, task, started, completed, model_used,
                success, tokens_saved, retries, notes)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -297,35 +321,30 @@ class BaseAgent:
              1 if success else 0, 1 if tokens_saved else 0, retries,
              result[:500] if result else ""),
         )
-        conn.commit()
-        conn.close()
+        self._db.commit()
 
     def save_metric(self, robot_serial: str, metric_name: str, value: float, units: str):
         """Save a performance metric to the database."""
         now = datetime.now().isoformat()
-        conn = sqlite3.connect(DB_PATH)
-        conn.execute(
+        self._db.execute(
             """INSERT INTO performance_metrics (robot_serial, timestamp, metric_name,
                value, units, source)
                VALUES (?, ?, ?, ?, ?, ?)""",
             (robot_serial, now, metric_name, value, units, self.agent_type),
         )
-        conn.commit()
-        conn.close()
+        self._db.commit()
 
     def log_activity(self, category: str, message: str, machine: str = "",
                      robot: str = "", level: str = "INFO"):
         """Log an activity to the activity_log table."""
         now = datetime.now().isoformat()
-        conn = sqlite3.connect(DB_PATH)
-        conn.execute(
+        self._db.execute(
             """INSERT INTO activity_log (timestamp, category, machine, robot,
                agent, message, level)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (now, category, machine, robot, self.agent_type, message, level),
         )
-        conn.commit()
-        conn.close()
+        self._db.commit()
 
     def get_model_info(self, task_type: str = None) -> dict:
         """Get model configuration for a task type."""
