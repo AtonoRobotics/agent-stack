@@ -16,7 +16,6 @@ from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.expanduser("~/agent-stack"))
 
-import aiosqlite
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Depends, HTTPException, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,6 +26,7 @@ import yaml
 import uvicorn
 
 from dashboard.backend.auth import AuthManager
+from tools.database import get_db, close_db
 
 DB_PATH = os.path.expanduser("~/agent-stack/data/metrics.db")
 CONFIG_DIR = os.path.expanduser("~/agent-stack/config")
@@ -105,6 +105,8 @@ async def lifespan(app: FastAPI):
         await disconnect_tcp_driver()
     except Exception:
         pass
+    # Close shared database connection
+    await close_db()
 
 
 app = FastAPI(
@@ -117,11 +119,10 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, 
 
 
 async def db_query(sql: str, params: tuple = ()) -> list[dict]:
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(sql, params)
-        rows = await cursor.fetchall()
-        return [dict(row) for row in rows]
+    db = await get_db()
+    cursor = await db.execute(sql, params)
+    rows = await cursor.fetchall()
+    return [dict(row) for row in rows]
 
 
 async def db_query_one(sql: str, params: tuple = ()) -> dict | None:

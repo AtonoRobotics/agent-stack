@@ -7,9 +7,13 @@ Async & sync database layer for the agent-stack metrics store.
 Uses aiosqlite for async operations and sqlite3 for synchronous
 initialization and sync wrapper helpers.  All tables are created
 automatically on import.
+
+WAL mode is enabled for concurrent read/write support.
+A shared async connection is used to avoid per-call overhead.
 """
 
 import os
+import glob
 import sqlite3
 import asyncio
 from datetime import datetime, timedelta, timezone
@@ -17,6 +21,7 @@ from datetime import datetime, timedelta, timezone
 import aiosqlite
 
 DB_PATH = os.path.expanduser("/home/samuel/agent-stack/data/metrics.db")
+MIGRATIONS_DIR = os.path.expanduser("/home/samuel/agent-stack/data/migrations")
 
 _TABLES_SQL = [
     """
@@ -110,17 +115,87 @@ _TABLES_SQL = [
 
 
 def init_db():
-    """Synchronous initialization -- creates the data directory, DB file, and all tables."""
+    """Synchronous initialization -- creates tables, enables WAL, runs migrations."""
     db_dir = os.path.dirname(DB_PATH)
     os.makedirs(db_dir, exist_ok=True)
 
     conn = sqlite3.connect(DB_PATH)
     try:
+        # Enable WAL mode for concurrent read/write
+        conn.execute("PRAGMA journal_mode=WAL")
+
         for ddl in _TABLES_SQL:
             conn.execute(ddl)
         conn.commit()
+
+        # Run pending migrations
+        _run_migrations(conn)
     finally:
         conn.close()
+
+
+def _run_migrations(conn: sqlite3.Connection):
+    """Apply numbered SQL migration files that haven't been run yet."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS schema_version (
+            version INTEGER PRIMARY KEY,
+            filename TEXT NOT NULL,
+            applied TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+
+    cursor = conn.execute("SELECT version FROM schema_version")
+    applied = {row[0] for row in cursor.fetchall()}
+
+    migration_files = sorted(glob.glob(os.path.join(MIGRATIONS_DIR, "*.sql")))
+    for filepath in migration_files:
+        filename = os.path.basename(filepath)
+        # Extract version number from filename (e.g., "001_indexes.sql" -> 1)
+        try:
+            version = int(filename.split("_")[0])
+        except (ValueError, IndexError):
+            continue
+
+        if version in applied:
+            continue
+
+        with open(filepath) as f:
+            sql = f.read()
+
+        for statement in sql.split(";"):
+            statement = statement.strip()
+            if statement:
+                conn.execute(statement)
+
+        conn.execute(
+            "INSERT INTO schema_version (version, filename, applied) VALUES (?, ?, ?)",
+            (version, filename, datetime.now(timezone.utc).isoformat()),
+        )
+        conn.commit()
+
+
+# ── Shared async connection ───────────────────────────────────────────────
+
+_async_db: aiosqlite.Connection | None = None
+
+
+async def get_db() -> aiosqlite.Connection:
+    """Return a shared async database connection (lazy init)."""
+    global _async_db
+    if _async_db is None:
+        _async_db = await aiosqlite.connect(DB_PATH)
+        await _async_db.execute("PRAGMA journal_mode=WAL")
+        _async_db.row_factory = aiosqlite.Row
+    return _async_db
+
+
+async def close_db():
+    """Close the shared async database connection."""
+    global _async_db
+    if _async_db is not None:
+        await _async_db.close()
+        _async_db = None
 
 
 async def insert(table: str, data: dict) -> int:
@@ -130,19 +205,18 @@ async def insert(table: str, data: dict) -> int:
     sql = f"INSERT INTO {table} ({columns}) VALUES ({placeholders})"
     values = tuple(data.values())
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute(sql, values)
-        await db.commit()
-        return cursor.lastrowid
+    db = await get_db()
+    cursor = await db.execute(sql, values)
+    await db.commit()
+    return cursor.lastrowid
 
 
 async def query(sql: str, params: tuple = ()) -> list:
     """Execute arbitrary SQL and return a list of dicts (one per row)."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(sql, params)
-        rows = await cursor.fetchall()
-        return [dict(row) for row in rows]
+    db = await get_db()
+    cursor = await db.execute(sql, params)
+    rows = await cursor.fetchall()
+    return [dict(row) for row in rows]
 
 
 async def get_recent(table: str, n: int = 100) -> list:

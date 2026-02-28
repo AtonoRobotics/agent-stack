@@ -42,6 +42,8 @@ class AuthManager:
         os.makedirs(CONFIG_DIR, exist_ok=True)
         self.jwt_secret = self._load_or_create_secret()
         self._revoked_tokens: set[str] = set()
+        self._db = sqlite3.connect(DB_PATH)
+        self._db.execute("PRAGMA journal_mode=WAL")
         self._ensure_audit_table()
 
     # ── Secrets ──────────────────────────────────────────
@@ -192,16 +194,12 @@ class AuthManager:
     # ── Audit logging ────────────────────────────────────
 
     def _ensure_audit_table(self):
-        conn = sqlite3.connect(DB_PATH)
-        conn.execute(CREATE_AUDIT_TABLE)
-        conn.commit()
-        conn.close()
+        self._db.execute(CREATE_AUDIT_TABLE)
+        self._db.commit()
 
     def log_audit(self, event: str, username: str = None, ip: str = None, details: str = None):
-        conn = sqlite3.connect(DB_PATH)
-        conn.execute(
+        self._db.execute(
             "INSERT INTO audit_log (timestamp, event, username, ip, details) VALUES (?, ?, ?, ?, ?)",
             (datetime.now(timezone.utc).isoformat(), event, username, ip, details),
         )
-        conn.commit()
-        conn.close()
+        self._db.commit()
