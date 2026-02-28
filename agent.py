@@ -20,6 +20,7 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.expanduser("~/agent-stack"))
 
+import httpx
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -37,7 +38,47 @@ AGENT_ROUTES = {
 }
 
 
-def route_task(task: str) -> str:
+AGENT_DESCRIPTIONS = {
+    "developer": "Code generation, debugging, refactoring, writing functions/classes/tests/scripts",
+    "researcher": "Documentation lookup, API research, dependency analysis, hardware specs, compatibility checks",
+    "sysadmin": "Docker, systemd, SSH, fleet management, package installation, git, deployment",
+    "simulator": "Isaac Sim scenes, URDF editing, cuRobo trajectories, physics simulation, digital twin",
+    "cosmos": "NVIDIA Cosmos world models, synthetic data generation, tokenizers",
+    "groot": "Robot training, RL policies, GR00T, datasets, checkpoints, reward functions",
+    "monitor": "Fleet health checks, GPU/RAM/disk monitoring, temperature alerts, machine status",
+}
+
+
+def _route_task_llm(task: str) -> str | None:
+    """Use local Ollama (qwen2.5:7b) to classify the task to an agent type."""
+    agent_list = "\n".join(f"- {name}: {desc}" for name, desc in AGENT_DESCRIPTIONS.items())
+    prompt = (
+        f"You are a task router. Given a user task, respond with ONLY the agent name "
+        f"that should handle it. Available agents:\n{agent_list}\n\n"
+        f"Task: {task}\n\nAgent name:"
+    )
+    try:
+        response = httpx.post(
+            "http://localhost:11434/api/generate",
+            json={"model": "qwen2.5:7b", "prompt": prompt, "stream": False},
+            timeout=httpx.Timeout(5.0),
+        )
+        response.raise_for_status()
+        result = response.json().get("response", "").strip().lower()
+        # Try exact match first
+        if result in AGENT_DESCRIPTIONS:
+            return result
+        # Try to extract agent name from response
+        for name in AGENT_DESCRIPTIONS:
+            if name in result:
+                return name
+        return None
+    except Exception:
+        return None
+
+
+def _route_task_keywords(task: str) -> str:
+    """Fallback: keyword-based routing."""
     task_lower = task.lower()
     scores = {}
     for agent_name, keywords in AGENT_ROUTES.items():
@@ -47,6 +88,14 @@ def route_task(task: str) -> str:
     if scores:
         return max(scores, key=scores.get)
     return "researcher"
+
+
+def route_task(task: str) -> str:
+    """Route a task to the best agent. Tries LLM first, falls back to keywords."""
+    llm_result = _route_task_llm(task)
+    if llm_result:
+        return llm_result
+    return _route_task_keywords(task)
 
 
 def get_agent(agent_type: str):
