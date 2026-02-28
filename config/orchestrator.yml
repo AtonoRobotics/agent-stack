@@ -1,0 +1,19 @@
+---
+orchestrator:
+  event_queue_max_size: 500
+  event_timeout_s: 300
+  max_concurrent_events: 3
+  max_messages_per_event: 12
+
+  models:
+    supervisor: {host: spark-2b53.local, port: 11434, model: "qwen2.5:72b"}
+    monitor: {host: localhost, port: 11434, model: "qwen2.5:7b"}
+    developer: {host: spark-2b53.local, port: 11434, model: "qwen2.5-coder:32b"}
+    default: {host: spark-2b53.local, port: 11434, model: "qwen2.5:72b"}
+
+  sources:
+    metrics: {enabled: true, interval_s: 60}
+    scheduler: {enabled: true}
+    filesystem: {enabled: true, paths: ["config/", "data/"]}
+    webhooks: {enabled: true}
+    ros2: {enabled: false}

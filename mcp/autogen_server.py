@@ -139,6 +139,36 @@ async def list_tools() -> list[types.Tool]:
                 "properties": {},
             },
         ),
+        types.Tool(
+            name="orchestrator__trigger",
+            description="Trigger an orchestrator event — sends a task to the autonomous agent team for processing.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task": {"type": "string", "description": "The task to process"},
+                    "priority": {"type": "integer", "description": "Priority (0=critical, 50=normal, 100=low)", "default": 50},
+                },
+                "required": ["task"],
+            },
+        ),
+        types.Tool(
+            name="orchestrator__status",
+            description="Get orchestrator status: event queue, recent events, active agents.",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+            },
+        ),
+        types.Tool(
+            name="orchestrator__events",
+            description="Get recent orchestrator events and their outcomes.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "description": "Number of events to return", "default": 20},
+                },
+            },
+        ),
     ]
 
 
@@ -164,6 +194,12 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
             result = await _run_fleet(arguments.get("task", ""), arguments.get("machines", "all"))
         elif name == "agent__status":
             result = await _get_status()
+        elif name == "orchestrator__trigger":
+            result = await _orchestrator_trigger(arguments.get("task", ""), arguments.get("priority", 50))
+        elif name == "orchestrator__status":
+            result = await _orchestrator_status()
+        elif name == "orchestrator__events":
+            result = await _orchestrator_events(arguments.get("limit", 20))
         else:
             result = f"Unknown tool: {name}"
         logger.info(f"Tool {name} completed successfully")
@@ -338,6 +374,68 @@ async def _get_status() -> str:
         lines.append("## Alerts: No data")
 
     return "\n".join(lines)
+
+
+async def _orchestrator_trigger(task: str, priority: int) -> str:
+    """Trigger an orchestrator event via the webhook API."""
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                "http://localhost:8080/api/orchestrator/trigger",
+                json={"task": task, "priority": priority},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                return f"Event queued: {data['event_id']} (status: {data['status']})"
+            return f"Error: HTTP {resp.status_code} — {resp.text}"
+    except Exception as e:
+        return f"Error triggering orchestrator: {e}\n(Is the dashboard running on port 8080?)"
+
+
+async def _orchestrator_status() -> str:
+    """Get orchestrator status from the database."""
+    try:
+        from orchestrator.persistence import EventStore
+        store = EventStore()
+        await store.init()
+        stats = await store.get_stats()
+        await store.close()
+
+        lines = ["# Orchestrator Status", ""]
+        lines.append(f"Total events: {stats['total_events']}")
+        lines.append(f"Active agents: {stats['active_agents']}")
+        lines.append("")
+        lines.append("Events by status:")
+        for status, count in stats.get("by_status", {}).items():
+            lines.append(f"  {status}: {count}")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error getting orchestrator status: {e}"
+
+
+async def _orchestrator_events(limit: int) -> str:
+    """Get recent orchestrator events."""
+    try:
+        from orchestrator.persistence import EventStore
+        store = EventStore()
+        await store.init()
+        events = await store.get_recent_events(limit=limit)
+        await store.close()
+
+        if not events:
+            return "No orchestrator events found."
+
+        lines = [f"# Recent Orchestrator Events ({len(events)})", ""]
+        for evt in events:
+            lines.append(f"  [{evt['status']}] {evt['source']}/{evt['event_type']} (priority={evt['priority']})")
+            if evt.get('result'):
+                lines.append(f"    Result: {evt['result'][:100]}")
+            lines.append(f"    Created: {evt['created_at']}")
+            lines.append("")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error getting orchestrator events: {e}"
 
 
 async def main():

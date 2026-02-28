@@ -1,0 +1,26 @@
+---
+schedules:
+  fleet_health_report:
+    cron: "0 8 * * *"
+    task: "Generate daily fleet health report for all machines"
+    priority: 50
+
+  disk_cleanup:
+    cron: "0 3 * * *"
+    task: "Clean fleet_health records older than 7 days and /tmp files older than 7 days"
+    priority: 100
+
+  ollama_model_check:
+    cron: "0 */6 * * *"
+    task: "Verify all expected Ollama models are loaded on each machine"
+    priority: 50
+
+  docker_health:
+    cron: "0 */4 * * *"
+    task: "Check Docker daemon health and container status across fleet"
+    priority: 50
+
+  git_sync_check:
+    cron: "0 9 * * 1"
+    task: "Check for unpushed commits in agent-stack, dobot-cr10-stack, dobot_cr10 repos"
+    priority: 100
