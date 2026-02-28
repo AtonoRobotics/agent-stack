@@ -897,18 +897,29 @@ async def ws_broadcast_loop():
 
 # ── Static frontend ──────────────────────────────────────
 
+DIST_DIR = os.path.join(FRONTEND_DIR, "dist")
+
 @app.get("/")
 async def serve_frontend():
-    index_path = os.path.join(FRONTEND_DIR, "index.html")
-    if os.path.exists(index_path):
-        return FileResponse(index_path)
-    return JSONResponse({"error": "Frontend not found. Place index.html in dashboard/frontend/"}, status_code=404)
+    # Prefer Vite build output, fall back to dev index.html
+    dist_index = os.path.join(DIST_DIR, "index.html")
+    if os.path.exists(dist_index):
+        return FileResponse(dist_index)
+    dev_index = os.path.join(FRONTEND_DIR, "index.html")
+    if os.path.exists(dev_index):
+        return FileResponse(dev_index)
+    return JSONResponse({"error": "Frontend not found. Run 'npm run build' in dashboard/frontend/"}, status_code=404)
 
 
 # Serve robot meshes (STL files)
 _meshes_dir = Path.home() / "dobot-cr10-stack" / "meshes"
 if _meshes_dir.exists():
     app.mount("/static/meshes", StaticFiles(directory=str(_meshes_dir)), name="meshes")
+
+# Serve Vite build assets (JS/CSS bundles)
+_assets_dir = os.path.join(DIST_DIR, "assets")
+if os.path.exists(_assets_dir):
+    app.mount("/assets", StaticFiles(directory=_assets_dir), name="assets")
 
 if os.path.exists(FRONTEND_DIR):
     app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
