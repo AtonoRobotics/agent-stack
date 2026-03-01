@@ -45,10 +45,12 @@ def _load_config(filename: str) -> dict:
 
 
 def _get_http_client() -> httpx.Client:
-    """Return a shared httpx client (lazy init, 60s timeout)."""
+    """Return a shared httpx client (lazy init, 180s read timeout)."""
     global _http_client
     if _http_client is None:
-        _http_client = httpx.Client(timeout=httpx.Timeout(60.0))
+        _http_client = httpx.Client(timeout=httpx.Timeout(
+            connect=10.0, read=300.0, write=10.0, pool=10.0
+        ))
         atexit.register(_http_client.close)
     return _http_client
 
@@ -171,7 +173,7 @@ class BaseAgent:
     def query_ollama(self, prompt: str, model: str, host: str, port: int) -> str:
         """Send a query to an Ollama instance and return the response.
 
-        Uses a shared httpx client with 60s timeout.
+        Uses a shared httpx client with 300s read timeout (72b models ~4.4 tok/s).
         POST to http://host:port/api/generate with stream=false.
         """
         url = f"http://{host}:{port}/api/generate"
@@ -179,6 +181,7 @@ class BaseAgent:
             "model": model,
             "prompt": prompt,
             "stream": False,
+            "options": {"num_predict": 1024},
         }
         self.logger.debug(f"Querying {model} @ {host}:{port}")
 
@@ -356,3 +359,21 @@ class BaseAgent:
             "port": conf.get("port", 11434),
             "is_local": conf.get("provider", "ollama") != "anthropic",
         }
+
+    def execute_skill(self, skill_name: str, **kwargs) -> dict:
+        """Execute a registered skill method by name.
+
+        Looks up skill_name in the agent's _SKILL_REGISTRY dict and calls it.
+        Returns a standardized result dict with success/result/error keys.
+        """
+        registry = getattr(self, "_SKILL_REGISTRY", {})
+        if skill_name not in registry:
+            return {"success": False, "result": None,
+                    "error": f"Unknown skill '{skill_name}'. Available: {list(registry.keys())}"}
+        try:
+            result = registry[skill_name](**kwargs)
+            self.log_activity("skill_execution", f"Executed: {skill_name}")
+            return {"success": True, "result": result, "error": None}
+        except Exception as e:
+            self.logger.error(f"Skill '{skill_name}' failed: {e}")
+            return {"success": False, "result": None, "error": str(e)}

@@ -29,6 +29,11 @@ class DeveloperAgent(BaseAgent):
 
     def __init__(self):
         super().__init__(self.task_type)
+        self._SKILL_REGISTRY = {
+            "generate_code": self.generate_code,
+            "fix_error": self.fix_error,
+            "refactor": self.refactor,
+        }
 
     def _validate_python(self, code: str) -> tuple[bool, str]:
         """Validate Python syntax. Returns (valid, error_message)."""

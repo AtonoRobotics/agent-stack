@@ -39,6 +39,13 @@ class SysadminAgent(BaseAgent):
 
     def __init__(self):
         super().__init__(self.task_type)
+        self._SKILL_REGISTRY = {
+            "execute_on_machine": self.execute_on_machine,
+            "deploy_to_fleet": self.deploy_to_fleet,
+            "manage_docker": self.manage_docker,
+            "manage_service": self.manage_service,
+            "git_operation": self.git_operation,
+        }
 
     def _is_destructive(self, command: str) -> bool:
         """Check if a command matches any known destructive pattern.

@@ -9,6 +9,7 @@ Exposes agent capabilities as MCP tools via stdio transport.
 
 import os
 import sys
+import re
 import json
 import asyncio
 import logging
@@ -16,6 +17,33 @@ import sqlite3
 from datetime import datetime
 
 sys.path.insert(0, os.path.expanduser("~/agent-stack"))
+
+
+def _extract_path(text: str, extensions: tuple = (".urdf", ".yaml", ".yml", ".py", ".json")) -> str | None:
+    """Extract a file path from text, verify it exists."""
+    # Match paths like ~/foo/bar.ext or /foo/bar.ext
+    for match in re.finditer(r'([~/][\w./_-]+(?:' + '|'.join(re.escape(e) for e in extensions) + r'))', text):
+        path = os.path.expanduser(match.group(1))
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def _extract_paths(text: str, extensions: tuple = (".urdf",)) -> list[str]:
+    """Extract multiple file paths from text."""
+    paths = []
+    for match in re.finditer(r'([~/][\w./_-]+(?:' + '|'.join(re.escape(e) for e in extensions) + r'))', text):
+        path = os.path.expanduser(match.group(1))
+        if os.path.exists(path):
+            paths.append(path)
+    return paths
+
+
+def _format_result(result: dict) -> str:
+    """Format a skill result dict as readable text."""
+    if isinstance(result, dict):
+        return json.dumps(result, indent=2, default=str)
+    return str(result)
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -218,10 +246,23 @@ async def _run_in_thread(func, *args):
 async def _run_developer(task: str, context: str) -> str:
     from agents.developer import DeveloperAgent
     agent = DeveloperAgent()
-    knowledge = agent.load_knowledge(agent.task_type)
-    prompt = f"Knowledge:\n{knowledge}\n\nContext:\n{context}\n\nTask: {task}\n\nProvide complete, production-quality code."
-    result = await _run_in_thread(agent.query_with_retry, prompt)
-    agent.log_task(task=task[:200], result=result[:500], model=agent.get_model_info()["model"], success=True)
+    task_lower = task.lower()
+
+    # Route to skill methods instead of raw LLM
+    if any(kw in task_lower for kw in ("fix", "debug", "error")):
+        file_path = _extract_path(task + " " + context, (".py", ".js", ".ts", ".yaml", ".yml"))
+        if file_path:
+            result = await _run_in_thread(agent.fix_error, task, file_path)
+            return f"Fix applied to {file_path}:\n{result[:2000]}"
+
+    if "refactor" in task_lower:
+        file_path = _extract_path(task + " " + context, (".py", ".js", ".ts"))
+        if file_path:
+            result = await _run_in_thread(agent.refactor, file_path, task)
+            return f"Refactored {file_path}:\n{result[:2000]}"
+
+    # Default: generate_code (still uses LLM but with syntax validation)
+    result = await _run_in_thread(agent.generate_code, task, context)
     return result
 
 
@@ -234,6 +275,89 @@ async def _run_researcher(task: str, context: str) -> str:
 async def _run_sysadmin(task: str, context: str) -> str:
     from agents.sysadmin import SysadminAgent
     agent = SysadminAgent()
+    task_lower = task.lower()
+    combined = task + " " + context
+
+    # Route to skill methods instead of raw LLM
+    if "git" in task_lower:
+        # Extract repo path or default
+        repo_path = _extract_path(combined, (".git",))
+        if not repo_path:
+            # Try common repo paths
+            for p in ["~/agent-stack", "~/dobot-cr10-stack", "~/dobot_cr10"]:
+                expanded = os.path.expanduser(p)
+                if os.path.isdir(os.path.join(expanded, ".git")):
+                    repo_path = expanded
+                    break
+        if repo_path:
+            # Determine git action
+            action = "status"
+            for a in ("pull", "push", "diff", "log", "fetch", "branch", "checkout", "commit"):
+                if a in task_lower:
+                    action = a
+                    break
+            result = await _run_in_thread(agent.git_operation, action, repo_path)
+            return _format_result(result)
+
+    if "docker" in task_lower:
+        # Determine action and container
+        action = "ps"
+        container = ""
+        for a in ("start", "stop", "restart", "rm", "rmi", "logs", "inspect", "pull"):
+            if a in task_lower:
+                action = a
+                break
+        # Extract container name (word after action keyword)
+        match = re.search(r'(?:container|image)\s+(\S+)', task_lower)
+        if match:
+            container = match.group(1)
+        # Detect machine name
+        machine = "local"
+        for m in agent.fleet_config:
+            if m in task_lower:
+                machine = m
+                break
+        result = await _run_in_thread(agent.manage_docker, action, container, machine)
+        return _format_result(result)
+
+    if any(kw in task_lower for kw in ("service", "systemctl")):
+        action = "status"
+        for a in ("start", "stop", "restart", "enable", "disable"):
+            if a in task_lower:
+                action = a
+                break
+        # Extract service name
+        match = re.search(r'(?:service|systemctl\s+\w+)\s+(\S+)', task_lower)
+        service = match.group(1) if match else ""
+        if not service:
+            # Try to find a .service name
+            match = re.search(r'(\S+\.service)', task_lower)
+            service = match.group(1) if match else "unknown"
+        machine = "local"
+        for m in agent.fleet_config:
+            if m in task_lower:
+                machine = m
+                break
+        result = await _run_in_thread(agent.manage_service, action, service, machine)
+        return _format_result(result)
+
+    if any(kw in task_lower for kw in ("deploy", "fleet")):
+        machines = None
+        for m in agent.fleet_config:
+            if m in task_lower:
+                if machines is None:
+                    machines = []
+                machines.append(m)
+        result = await _run_in_thread(agent.deploy_to_fleet, task, machines)
+        return _format_result(result)
+
+    # Check if a specific machine is mentioned -> execute_on_machine
+    for machine_name in agent.fleet_config:
+        if machine_name in task_lower:
+            result = await _run_in_thread(agent.execute_on_machine, task, machine_name)
+            return result
+
+    # Fallback: LLM for planning/advice (no file access needed)
     knowledge = agent.load_knowledge(agent.task_type)
     prompt = f"Fleet:\n{json.dumps(agent.fleet_config, indent=2)}\n\nKnowledge:\n{knowledge}\n\nContext: {context}\n\nTask: {task}\n\nProvide specific commands. Flag destructive operations."
     result = await _run_in_thread(agent.query_with_retry, prompt)
@@ -244,6 +368,53 @@ async def _run_sysadmin(task: str, context: str) -> str:
 async def _run_simulator(task: str, context: str) -> str:
     from agents.simulator import SimulatorAgent
     agent = SimulatorAgent()
+    task_lower = task.lower()
+    combined = task + " " + context
+
+    # Route to deterministic skill methods
+    if any(kw in task_lower for kw in ("parse urdf", "parse_urdf")):
+        path = _extract_path(combined, (".urdf",))
+        result = await _run_in_thread(agent.parse_urdf, path)
+        return _format_result(result)
+
+    if any(kw in task_lower for kw in ("validate urdf", "validate_urdf", "check urdf")):
+        path = _extract_path(combined, (".urdf",))
+        result = await _run_in_thread(agent.validate_urdf, path)
+        return _format_result(result)
+
+    if any(kw in task_lower for kw in ("compare urdf", "compare_urdf", "diff urdf")):
+        paths = _extract_paths(combined, (".urdf",))
+        result = await _run_in_thread(agent.compare_urdfs, paths if paths else None)
+        return _format_result(result)
+
+    if any(kw in task_lower for kw in ("consolidate", "merge urdf")):
+        paths = _extract_paths(combined, (".urdf",))
+        result = await _run_in_thread(agent.consolidate_urdfs, paths if paths else None)
+        return _format_result(result)
+
+    if any(kw in task_lower for kw in ("collision sphere", "collision_sphere")):
+        path = _extract_path(combined, (".urdf",))
+        result = await _run_in_thread(agent.generate_collision_spheres, path)
+        return _format_result(result)
+
+    if "curobo" in task_lower and any(kw in task_lower for kw in ("validate", "check", "verify")):
+        config_path = _extract_path(combined, (".yaml", ".yml"))
+        urdf_path = _extract_path(combined, (".urdf",))
+        result = await _run_in_thread(agent.validate_curobo_config, config_path, urdf_path)
+        return _format_result(result)
+
+    if any(kw in task_lower for kw in ("fix", "error", "debug")):
+        result = await _run_in_thread(agent.fix_sim_error, combined)
+        return f"Auto-fix result: {result}"
+
+    if "template" in task_lower:
+        # Extract template name
+        match = re.search(r'template\s+(\S+)', task_lower)
+        template_name = match.group(1) if match else "default"
+        result = await _run_in_thread(agent.run_template, template_name)
+        return _format_result(result)
+
+    # Fallback: LLM for open-ended simulation questions
     knowledge = agent.load_knowledge(agent.task_type)
     prompt = f"Knowledge:\n{knowledge}\n\nContext: {context}\n\nTask: {task}\n\nProvide Isaac Sim / cuRobo code and configuration."
     result = await _run_in_thread(agent.query_with_retry, prompt)
@@ -377,20 +548,40 @@ async def _get_status() -> str:
 
 
 async def _orchestrator_trigger(task: str, priority: int) -> str:
-    """Trigger an orchestrator event via the webhook API."""
-    import httpx
+    """Trigger an orchestrator event by writing directly to the event database.
+
+    The running orchestrator watches the data/ directory via FileSystemWatcher
+    and will pick up new events. We also write a trigger file to ensure detection.
+    """
+    import uuid
+    import aiosqlite
+    DB_PATH = os.path.expanduser("~/agent-stack/data/metrics.db")
+    TRIGGER_DIR = os.path.expanduser("~/agent-stack/data")
+
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.post(
-                "http://localhost:8080/api/orchestrator/trigger",
-                json={"task": task, "priority": priority},
+        event_id = str(uuid.uuid4())
+        now = datetime.now().isoformat()
+        payload = json.dumps({"task": task, "source": "claude_code"})
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("PRAGMA journal_mode=WAL")
+            await db.execute(
+                """INSERT INTO orchestrator_events
+                   (id, source, event_type, priority, timestamp, payload, status, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (event_id, "mcp", "manual_trigger", priority, now, payload, "pending", now),
             )
-            if resp.status_code == 200:
-                data = resp.json()
-                return f"Event queued: {data['event_id']} (status: {data['status']})"
-            return f"Error: HTTP {resp.status_code} — {resp.text}"
+            await db.commit()
+
+        # Touch a trigger file so the orchestrator's FileSystemWatcher detects the change
+        trigger_path = os.path.join(TRIGGER_DIR, "mcp_trigger.flag")
+        with open(trigger_path, "w") as f:
+            f.write(f"{event_id}\n{task}\n{now}\n")
+
+        logger.info(f"Orchestrator event queued: {event_id[:8]} priority={priority} task={task[:100]}")
+        return f"Event queued: {event_id}\nPriority: {priority}\nTask: {task}\nStatus: pending\n\nThe orchestrator will pick this up and route it to the appropriate agent team."
     except Exception as e:
-        return f"Error triggering orchestrator: {e}\n(Is the dashboard running on port 8080?)"
+        return f"Error triggering orchestrator: {e}"
 
 
 async def _orchestrator_status() -> str:

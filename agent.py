@@ -13,7 +13,9 @@ Usage:
 
 import os
 import sys
+import re
 import time
+import json
 import argparse
 import webbrowser
 from datetime import datetime
@@ -159,21 +161,19 @@ def run_task(task: str, agent_type: str = None):
 
     try:
         with console.status(f"[yellow]Running {agent_type} agent...[/yellow]", spinner="dots"):
-            if agent_type == "developer":
-                knowledge = agent.load_knowledge(agent.task_type)
-                prompt = f"Knowledge:\n{knowledge}\n\nTask: {task}\n\nProvide complete, production-quality code."
-                result = agent.query_with_retry(prompt)
-            elif agent_type == "monitor":
+            if agent_type == "monitor":
                 metrics = agent.check_all_machines()
                 agent.write_metrics(metrics)
                 alerts = agent.evaluate_alerts(metrics)
                 result = _format_monitor(metrics, alerts)
             elif agent_type == "researcher":
                 result = agent.research(task)
+            elif agent_type == "simulator":
+                result = _run_simulator_cli(agent, task)
             elif agent_type == "sysadmin":
-                knowledge = agent.load_knowledge(agent.task_type)
-                prompt = f"Fleet:\n{agent.fleet_config}\n\nKnowledge:\n{knowledge}\n\nTask: {task}"
-                result = agent.query_with_retry(prompt)
+                result = _run_sysadmin_cli(agent, task)
+            elif agent_type == "developer":
+                result = _run_developer_cli(agent, task)
             else:
                 knowledge = agent.load_knowledge(agent.task_type)
                 prompt = f"Knowledge:\n{knowledge}\n\nTask: {task}"
@@ -205,6 +205,133 @@ def run_task(task: str, agent_type: str = None):
         footer.add_row("Error:", str(e)[:100])
         console.print(Panel(footer, title="[bold red]FAILED[/bold red]", border_style="red"))
         sys.exit(1)
+
+
+def _extract_path(text: str, extensions: tuple = (".urdf", ".yaml", ".yml", ".py")) -> str | None:
+    """Extract a file path from text, verify it exists."""
+    for match in re.finditer(r'([~/][\w./_-]+(?:' + '|'.join(re.escape(e) for e in extensions) + r'))', text):
+        path = os.path.expanduser(match.group(1))
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def _run_simulator_cli(agent, task: str) -> str:
+    """Route simulator tasks to deterministic skill methods."""
+    task_lower = task.lower()
+
+    if any(kw in task_lower for kw in ("parse urdf", "parse_urdf")):
+        path = _extract_path(task, (".urdf",))
+        return json.dumps(agent.parse_urdf(path), indent=2, default=str)
+
+    if any(kw in task_lower for kw in ("validate urdf", "validate_urdf", "check urdf")):
+        path = _extract_path(task, (".urdf",))
+        return json.dumps(agent.validate_urdf(path), indent=2, default=str)
+
+    if any(kw in task_lower for kw in ("compare urdf", "compare_urdf", "diff urdf")):
+        return json.dumps(agent.compare_urdfs(), indent=2, default=str)
+
+    if any(kw in task_lower for kw in ("consolidate", "merge urdf")):
+        return json.dumps(agent.consolidate_urdfs(), indent=2, default=str)
+
+    if any(kw in task_lower for kw in ("collision sphere", "collision_sphere")):
+        path = _extract_path(task, (".urdf",))
+        return json.dumps(agent.generate_collision_spheres(path), indent=2, default=str)
+
+    if "curobo" in task_lower and any(kw in task_lower for kw in ("validate", "check", "verify")):
+        config_path = _extract_path(task, (".yaml", ".yml"))
+        urdf_path = _extract_path(task, (".urdf",))
+        return json.dumps(agent.validate_curobo_config(config_path, urdf_path), indent=2, default=str)
+
+    if any(kw in task_lower for kw in ("fix", "error", "debug")):
+        result = agent.fix_sim_error(task)
+        return f"Auto-fix result: {result}"
+
+    # Fallback: LLM
+    knowledge = agent.load_knowledge(agent.task_type)
+    prompt = f"Knowledge:\n{knowledge}\n\nTask: {task}"
+    return agent.query_with_retry(prompt)
+
+
+def _run_sysadmin_cli(agent, task: str) -> str:
+    """Route sysadmin tasks to deterministic skill methods."""
+    task_lower = task.lower()
+
+    if "git" in task_lower:
+        repo_path = _extract_path(task)
+        if not repo_path:
+            for p in ["~/agent-stack", "~/dobot-cr10-stack", "~/dobot_cr10"]:
+                expanded = os.path.expanduser(p)
+                if os.path.isdir(os.path.join(expanded, ".git")):
+                    repo_path = expanded
+                    break
+        if repo_path:
+            action = "status"
+            for a in ("pull", "push", "diff", "log", "fetch", "branch", "checkout", "commit"):
+                if a in task_lower:
+                    action = a
+                    break
+            return json.dumps(agent.git_operation(action, repo_path), indent=2)
+
+    if "docker" in task_lower:
+        action = "ps"
+        container = ""
+        for a in ("start", "stop", "restart", "rm", "rmi", "logs", "inspect", "pull"):
+            if a in task_lower:
+                action = a
+                break
+        match = re.search(r'(?:container|image)\s+(\S+)', task_lower)
+        if match:
+            container = match.group(1)
+        machine = "local"
+        for m in agent.fleet_config:
+            if m in task_lower:
+                machine = m
+                break
+        return json.dumps(agent.manage_docker(action, container, machine), indent=2)
+
+    if any(kw in task_lower for kw in ("service", "systemctl")):
+        action = "status"
+        for a in ("start", "stop", "restart", "enable", "disable"):
+            if a in task_lower:
+                action = a
+                break
+        match = re.search(r'(?:service|systemctl\s+\w+)\s+(\S+)', task_lower)
+        service = match.group(1) if match else ""
+        if not service:
+            match = re.search(r'(\S+\.service)', task_lower)
+            service = match.group(1) if match else "unknown"
+        machine = "local"
+        for m in agent.fleet_config:
+            if m in task_lower:
+                machine = m
+                break
+        return json.dumps(agent.manage_service(action, service, machine), indent=2)
+
+    # Fallback: LLM
+    knowledge = agent.load_knowledge(agent.task_type)
+    prompt = f"Fleet:\n{agent.fleet_config}\n\nKnowledge:\n{knowledge}\n\nTask: {task}"
+    return agent.query_with_retry(prompt)
+
+
+def _run_developer_cli(agent, task: str) -> str:
+    """Route developer tasks to skill methods."""
+    task_lower = task.lower()
+
+    if any(kw in task_lower for kw in ("fix", "debug", "error")):
+        file_path = _extract_path(task, (".py", ".js", ".ts", ".yaml", ".yml"))
+        if file_path:
+            result = agent.fix_error(task, file_path)
+            return f"Fix applied to {file_path}:\n{result[:2000]}"
+
+    if "refactor" in task_lower:
+        file_path = _extract_path(task, (".py", ".js", ".ts"))
+        if file_path:
+            result = agent.refactor(file_path, task)
+            return f"Refactored {file_path}:\n{result[:2000]}"
+
+    # Default: generate_code (uses LLM but with syntax validation)
+    return agent.generate_code(task)
 
 
 def _format_monitor(metrics: dict, alerts: list) -> str:
