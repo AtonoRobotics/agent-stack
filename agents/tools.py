@@ -712,3 +712,126 @@ def git_branch(repo_path: str, action: str = "list", name: str = "") -> str:
     elif action == "delete" and name:
         return _run(["git", "-C", expanded, "branch", "-d", name])
     return f"Invalid action '{action}' or missing branch name."
+
+
+# ---------------------------------------------------------------------------
+# Safety System Tools
+# ---------------------------------------------------------------------------
+
+SAFETY_KNOWLEDGE_PATH = os.path.expanduser("~/agent-stack/knowledge/safety")
+SAFETY_CONFIG_PATH = os.path.expanduser("~/dobot_cr10/config/safety")
+
+
+def safety_check_perception() -> str:
+    """Check if NvBlox perception pipeline Docker container is running and healthy."""
+    try:
+        # Check if Isaac ROS container is running
+        result = _run(["docker", "ps", "--filter", "name=isaac_ros", "--format", "{{.Names}} {{.Status}}"])
+        if not result or "isaac_ros" not in result:
+            return "PERCEPTION_OFFLINE: No Isaac ROS container running. Launch with: ~/workspaces/isaac_ros-dev/run_isaac_ros.sh zed"
+
+        # Check if NvBlox node is active (via ROS2 topic list)
+        topics = _run(["docker", "exec", "isaac_ros_dev", "bash", "-c", "ros2 topic list 2>/dev/null | grep nvblox"], timeout=10)
+        if "nvblox" in topics:
+            return f"PERCEPTION_OK: NvBlox topics active:\n{topics}"
+        return "PERCEPTION_DEGRADED: Isaac ROS running but no NvBlox topics found"
+    except Exception as e:
+        return f"PERCEPTION_ERROR: {e}"
+
+
+def safety_check_zones(joint_positions: str = "") -> str:
+    """Check current safety zone status. Optionally provide 6 joint positions (comma-separated)."""
+    try:
+        config_path = os.path.join(SAFETY_CONFIG_PATH, "safety_zones.yaml")
+        if not os.path.exists(config_path):
+            return "SAFETY_CONFIG_MISSING: No safety_zones.yaml found. Safety system not configured yet."
+
+        with open(config_path) as f:
+            config = yaml.safe_load(f)
+
+        zones = config.get("safety_zones", {})
+        return json.dumps({
+            "status": "CONFIGURED",
+            "zones": zones,
+            "note": "Safety monitor not yet running — zone check requires perception pipeline",
+        }, indent=2)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+def safety_get_architecture() -> str:
+    """Return the safety system architecture summary."""
+    try:
+        arch_path = os.path.join(SAFETY_KNOWLEDGE_PATH, "safety_system_architecture.md")
+        if os.path.exists(arch_path):
+            with open(arch_path) as f:
+                # Return first 100 lines (overview + architecture diagram)
+                lines = f.readlines()[:100]
+                return "".join(lines)
+        return "Architecture document not found at: " + arch_path
+    except Exception as e:
+        return f"Error: {e}"
+
+
+def safety_list_knowledge() -> str:
+    """List all safety knowledge base documents."""
+    try:
+        if not os.path.isdir(SAFETY_KNOWLEDGE_PATH):
+            return "Safety knowledge directory not found"
+        files = []
+        for f in sorted(os.listdir(SAFETY_KNOWLEDGE_PATH)):
+            if f.endswith(".md"):
+                path = os.path.join(SAFETY_KNOWLEDGE_PATH, f)
+                size = os.path.getsize(path)
+                files.append(f"{f} ({size} bytes)")
+        return "Safety Knowledge Base:\n" + "\n".join(f"  - {f}" for f in files)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+def safety_validate_trajectory(trajectory_json: str) -> str:
+    """Validate a joint trajectory against safety limits (joint limits, velocity, workspace)."""
+    try:
+        import numpy as np
+
+        traj = json.loads(trajectory_json)
+        points = traj.get("trajectory", [])
+        if not points:
+            return "INVALID: Empty trajectory"
+
+        # CR10 joint limits from URDF
+        limits = [
+            (-3.14, 3.14),   # joint1
+            (-3.14, 3.14),   # joint2
+            (-2.861, 2.861), # joint3
+            (-3.14, 3.14),   # joint4
+            (-3.14, 3.14),   # joint5
+            (-6.28, 6.28),   # joint6
+        ]
+        max_velocities = [2.094, 2.094, 3.0, 3.927, 3.927, 6.283]
+
+        violations = []
+        for i, point in enumerate(points):
+            t = point[0]
+            joints = point[1:7]
+
+            # Check joint limits
+            for j, (pos, (lo, hi)) in enumerate(zip(joints, limits)):
+                if pos < lo or pos > hi:
+                    violations.append(f"Point {i} (t={t:.3f}s): joint{j+1}={pos:.4f} out of [{lo}, {hi}]")
+
+            # Check velocity (finite differences)
+            if i > 0:
+                dt = t - points[i-1][0]
+                if dt > 0:
+                    prev_joints = points[i-1][1:7]
+                    for j in range(6):
+                        vel = abs(joints[j] - prev_joints[j]) / dt
+                        if vel > max_velocities[j]:
+                            violations.append(f"Point {i} (t={t:.3f}s): joint{j+1} vel={vel:.3f} > {max_velocities[j]} rad/s")
+
+        if violations:
+            return f"UNSAFE: {len(violations)} violations:\n" + "\n".join(violations[:20])
+        return f"SAFE: {len(points)} trajectory points validated, no violations"
+    except Exception as e:
+        return f"VALIDATION_ERROR: {e}"

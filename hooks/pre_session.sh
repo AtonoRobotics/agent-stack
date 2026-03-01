@@ -37,5 +37,33 @@ if [ -f "$SPRINT_FILE" ]; then
     cat "$SPRINT_FILE"
 fi
 
+# Verify MCP agent stack is functional
+echo ""
+echo "=== Agent Stack Health Check ==="
+AGENT_TEST=$(cd "$HOME/agent-stack" && PYTHONPATH="$HOME/agent-stack" python -c "
+import asyncio
+from agents.teams import run_team
+async def test():
+    try:
+        result = await asyncio.wait_for(run_team('monitor', 'Report status briefly'), timeout=30)
+        if result and len(result) > 5:
+            print('PASS: Agent stack responding')
+            return True
+        else:
+            print('FAIL: Agent returned empty response')
+            return False
+    except Exception as e:
+        print(f'FAIL: Agent error — {e}')
+        return False
+asyncio.run(test())
+" 2>&1)
+echo "$AGENT_TEST"
+if echo "$AGENT_TEST" | grep -q "FAIL"; then
+    echo ""
+    echo "WARNING: Agent stack is NOT functional."
+    echo "If MCP server process is stale, restart Claude Code session."
+    echo "The MCP server must be restarted to pick up code changes."
+fi
+
 echo ""
 echo "Pre-session check complete."

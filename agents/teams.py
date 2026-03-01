@@ -98,7 +98,7 @@ AGENT_CONFIGS = {
 }
 
 
-AGENT_TIMEOUT = 120  # seconds — kill hung agents after this
+AGENT_TIMEOUT = 300  # seconds — DGX Spark cold start (60s) + inference at ~4.4 tok/s (ADR-004)
 
 
 async def run_team(agent_type: str, task: str) -> str:

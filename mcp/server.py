@@ -129,7 +129,7 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
     logger.info(f"Tool call: {name} args={json.dumps(arguments)[:200]}")
     try:
         if name.startswith("agent__"):
-            result = await asyncio.wait_for(_handle_agent(name, arguments), timeout=180)
+            result = await asyncio.wait_for(_handle_agent(name, arguments), timeout=360)
         elif name == "orchestrator__trigger":
             result = await _orchestrator_trigger(arguments.get("task", ""), arguments.get("priority", 50))
         elif name == "orchestrator__status":
@@ -141,7 +141,7 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
         logger.info(f"Tool {name} completed successfully")
         return [types.TextContent(type="text", text=result)]
     except asyncio.TimeoutError:
-        error_msg = f"Tool {name} timed out after 180s"
+        error_msg = f"Tool {name} timed out after 360s"
         logger.error(error_msg)
         return [types.TextContent(type="text", text=error_msg)]
     except Exception as e:

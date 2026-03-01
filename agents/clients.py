@@ -20,12 +20,13 @@ def _load_config():
         return yaml.safe_load(f)
 
 
-def create_client(model: str, host: str, port: int = 11434) -> OpenAIChatCompletionClient:
+def create_client(model: str, host: str, port: int = 11434, timeout: float = 300.0) -> OpenAIChatCompletionClient:
     return OpenAIChatCompletionClient(
         model=model,
         api_key="ollama",
         base_url=f"http://{host}:{port}/v1",
         model_info=MODEL_INFO,
+        timeout=timeout,
     )
 
 
