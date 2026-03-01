@@ -231,14 +231,28 @@ async def _get_status() -> str:
 
 
 async def _orchestrator_trigger(task: str, priority: int) -> str:
-    """Queue an orchestrator event in the database."""
+    """Queue an orchestrator event in the database with deduplication."""
     try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.row_factory = sqlite3.Row
+
+        # Dedup: skip if identical task was queued in the last 60 seconds
+        recent = conn.execute(
+            """SELECT id, status, created_at FROM orchestrator_events
+               WHERE source = 'mcp' AND payload LIKE ? AND created_at > datetime('now', '-60 seconds')
+               ORDER BY created_at DESC LIMIT 1""",
+            (f'%{task[:80]}%',),
+        ).fetchone()
+        if recent:
+            conn.close()
+            return (f"Deduplicated: identical task queued {recent['created_at']} "
+                    f"(id={recent['id']}, status={recent['status']}). Skipped.")
+
         event_id = str(uuid.uuid4())
         now = datetime.now().isoformat()
         payload = json.dumps({"task": task, "source": "claude_code"})
 
-        conn = sqlite3.connect(DB_PATH)
-        conn.execute("PRAGMA journal_mode=WAL")
         conn.execute(
             """INSERT INTO orchestrator_events
                (id, source, event_type, priority, timestamp, payload, status, created_at)
@@ -294,7 +308,7 @@ async def _orchestrator_events(limit: int) -> str:
         lines = [f"# Recent Events ({len(rows)})", ""]
         for row in rows:
             lines.append(f"  [{row['status']}] {row['source']}/{row['event_type']} (p={row['priority']})")
-            if row.get("result"):
+            if row["result"]:
                 lines.append(f"    Result: {str(row['result'])[:100]}")
             lines.append(f"    Created: {row['created_at']}")
             lines.append("")
