@@ -146,6 +146,24 @@ def load_yaml(filename: str) -> dict:
     return {}
 
 
+# ── Health check ─────────────────────────────────────────
+
+@app.get("/api/health")
+async def health_check():
+    """Basic health check for monitoring and load balancers."""
+    db_ok = False
+    try:
+        await db_query("SELECT 1")
+        db_ok = True
+    except Exception:
+        pass
+    return {
+        "status": "ok" if db_ok else "degraded",
+        "database": db_ok,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+
 # ── Auth routes ──────────────────────────────────────────
 
 class LoginRequest(BaseModel):
