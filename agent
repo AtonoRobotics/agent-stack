@@ -1,3 +1,0 @@
-#!/bin/bash
-# Mission Control CLI wrapper
-exec /home/samuel/anaconda3/bin/python3 ~/agent-stack/agent.py "$@"
