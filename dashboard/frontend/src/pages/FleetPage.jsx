@@ -3,6 +3,7 @@ import { authFetch } from '../utils/authFetch'
 import { StatusDot } from '../components/StatusDot'
 import { Badge } from '../components/Badge'
 import { GaugeBar } from '../components/GaugeBar'
+import { fmtDate } from '../utils/fmt'
 
 var e = React.createElement;
 
@@ -109,7 +110,64 @@ function FleetPage() {
                 : null
             );
           })
+        ),
+
+    // Compute History (collapsible)
+    e(ComputeHistory)
+  );
+}
+
+function ComputeHistory() {
+  var openState = useState(false);
+  var open = openState[0], setOpen = openState[1];
+  var dataState = useState([]);
+  var data = dataState[0], setData = dataState[1];
+  var loadedState = useState(false);
+  var loaded = loadedState[0], setLoaded = loadedState[1];
+
+  function toggle() {
+    if (!open && !loaded) {
+      authFetch('/mc/api/compute/snapshots?limit=20')
+        .then(function(r) { return r.json(); })
+        .then(function(d) { setData(d.items || d); setLoaded(true); })
+        .catch(function() { setLoaded(true); });
+    }
+    setOpen(!open);
+  }
+
+  return e('div', { style: { marginTop: '16px' } },
+    e('button', {
+      className: 'glass-btn',
+      onClick: toggle,
+      style: { display: 'flex', alignItems: 'center', gap: '6px', marginBottom: open ? '8px' : 0 }
+    },
+      e('span', { style: { transform: open ? 'rotate(180deg)' : 'rotate(0)', transition: 'transform 0.15s', display: 'inline-block', fontSize: '10px' } }, '\u25BC'),
+      'Compute History'
+    ),
+    open ? e('table', { className: 'glass-table' },
+      e('thead', null,
+        e('tr', null,
+          e('th', null, 'Host'),
+          e('th', null, 'Timestamp'),
+          e('th', null, 'CPU %'),
+          e('th', null, 'RAM'),
+          e('th', null, 'Disk')
         )
+      ),
+      e('tbody', null,
+        data.length === 0
+          ? e('tr', null, e('td', { colSpan: 5, style: { textAlign: 'center', color: 'var(--text-dim)', padding: '20px' } }, loaded ? 'No snapshots' : 'Loading...'))
+          : data.map(function(s, i) {
+              return e('tr', { key: i },
+                e('td', { className: 'mono' }, s.host || '—'),
+                e('td', null, fmtDate(s.created_at || s.timestamp)),
+                e('td', { className: 'mono' }, s.cpu_percent != null ? s.cpu_percent.toFixed(1) + '%' : '—'),
+                e('td', { className: 'mono' }, s.ram_used_gb != null && s.ram_total_gb != null ? s.ram_used_gb.toFixed(1) + '/' + s.ram_total_gb.toFixed(1) + 'GB' : '—'),
+                e('td', { className: 'mono' }, s.disk_used_gb != null && s.disk_total_gb != null ? Math.round(s.disk_used_gb) + '/' + Math.round(s.disk_total_gb) + 'GB' : '—')
+              );
+            })
+      )
+    ) : null
   );
 }
 

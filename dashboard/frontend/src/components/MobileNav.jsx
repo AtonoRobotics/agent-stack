@@ -14,7 +14,11 @@ function MobileNav() {
     { page: 'simulations', icon: 'play', label: 'Sims' },
     { page: 'demos', icon: 'activity', label: 'Demos' },
     { page: 'training', icon: 'brain', label: 'Training' },
-    { page: 'agents', icon: 'users', label: 'Agents' }
+    { page: 'agents', icon: 'users', label: 'Agents' },
+    { page: 'mc-agents', icon: 'pipeline', label: 'Pipeline' },
+    { page: 'workflows', icon: 'workflow', label: 'Workflows' },
+    { page: 'registry', icon: 'registry', label: 'Registry' },
+    { page: 'infra', icon: 'infra', label: 'Infra' }
   ];
   return e('nav', { className: 'mobile-nav' },
     links.map(function(l) {

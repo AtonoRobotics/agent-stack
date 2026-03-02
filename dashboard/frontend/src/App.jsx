@@ -14,6 +14,10 @@ import { SimulationsPage } from './pages/SimulationsPage'
 import { TrainingPage } from './pages/TrainingPage'
 import { AgentsPage } from './pages/AgentsPage'
 import { DemosPage } from './pages/DemosPage'
+import { MCAgentsPage } from './pages/MCAgentsPage'
+import { WorkflowsPage } from './pages/WorkflowsPage'
+import { RegistryPage } from './pages/RegistryPage'
+import { InfraPage } from './pages/InfraPage'
 
 var e = React.createElement;
 
@@ -117,6 +121,10 @@ function App() {
   else if (currentPage === 'training') pageElement = e(TrainingPage);
   else if (currentPage === 'agents') pageElement = e(AgentsPage);
   else if (currentPage === 'demos') pageElement = e(DemosPage);
+  else if (currentPage === 'mc-agents') pageElement = e(MCAgentsPage);
+  else if (currentPage === 'workflows') pageElement = e(WorkflowsPage);
+  else if (currentPage === 'registry') pageElement = e(RegistryPage);
+  else if (currentPage === 'infra') pageElement = e(InfraPage);
 
   return e(AuthContext.Provider, { value: authContextValue },
     e(NavContext.Provider, { value: navContextValue },

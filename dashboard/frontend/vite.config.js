@@ -7,9 +7,14 @@ export default defineConfig({
     outDir: 'dist',
   },
   server: {
+    allowedHosts: ['.trycloudflare.com'],
     proxy: {
       '/api': 'http://127.0.0.1:8080',
       '/ws': { target: 'ws://127.0.0.1:8080', ws: true },
+      '/mc': {
+        target: 'http://127.0.0.1:8000',
+        rewrite: function(path) { return path.replace(/^\/mc/, ''); },
+      },
     },
   },
 })
