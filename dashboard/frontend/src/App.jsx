@@ -8,12 +8,6 @@ import { MobileNav } from './components/MobileNav'
 import { LoginPage } from './pages/LoginPage'
 import { LabOverviewPage } from './pages/LabOverviewPage'
 import { FleetPage } from './pages/FleetPage'
-import { RobotDetailPage } from './pages/RobotDetailPage'
-import { CockpitPage } from './pages/CockpitPage'
-import { SimulationsPage } from './pages/SimulationsPage'
-import { TrainingPage } from './pages/TrainingPage'
-import { AgentsPage } from './pages/AgentsPage'
-import { DemosPage } from './pages/DemosPage'
 import { MCAgentsPage } from './pages/MCAgentsPage'
 import { WorkflowsPage } from './pages/WorkflowsPage'
 import { RegistryPage } from './pages/RegistryPage'
@@ -115,12 +109,6 @@ function App() {
   var pageElement = null;
   if (currentPage === 'lab') pageElement = e(LabOverviewPage);
   else if (currentPage === 'fleet') pageElement = e(FleetPage);
-  else if (currentPage === 'robot') pageElement = e(RobotDetailPage);
-  else if (currentPage === 'cockpit') pageElement = e(CockpitPage);
-  else if (currentPage === 'simulations') pageElement = e(SimulationsPage);
-  else if (currentPage === 'training') pageElement = e(TrainingPage);
-  else if (currentPage === 'agents') pageElement = e(AgentsPage);
-  else if (currentPage === 'demos') pageElement = e(DemosPage);
   else if (currentPage === 'mc-agents') pageElement = e(MCAgentsPage);
   else if (currentPage === 'workflows') pageElement = e(WorkflowsPage);
   else if (currentPage === 'registry') pageElement = e(RegistryPage);

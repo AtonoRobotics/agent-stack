@@ -13,12 +13,7 @@ function Sidebar(props) {
 
   var links = [
     { page: 'lab', icon: 'home', label: 'Mission Control' },
-    { page: 'robot', icon: 'robot', label: 'Robots', params: { id: 'dobot_cr10' } },
     { page: 'fleet', icon: 'server', label: 'Fleet' },
-    { page: 'simulations', icon: 'play', label: 'Simulations' },
-    { page: 'demos', icon: 'activity', label: 'Demos' },
-    { page: 'training', icon: 'brain', label: 'Training' },
-    { page: 'agents', icon: 'users', label: 'Agents' },
     { page: 'mc-agents', icon: 'pipeline', label: 'Pipeline Agents' },
     { page: 'workflows', icon: 'workflow', label: 'Workflows' },
     { page: 'registry', icon: 'registry', label: 'Registry' },
