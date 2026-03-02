@@ -25,7 +25,6 @@ function FleetPage() {
 
   var displayMachines = fleetData ? fleetData.map(function(m) {
     var met = m.metrics || {};
-    // Check if we have real metric data (not all null)
     var hasMetrics = met.ram_total != null && met.ram_total > 0;
     return {
       id: m.name, name: m.name, os: (m.config && m.config.os) || 'N/A', arch: (m.config && m.config.arch) || 'N/A',
@@ -44,9 +43,9 @@ function FleetPage() {
 
   if (loading) {
     return e('div', null,
-      e('div', { className: 'page-header' },
-        e('h1', { className: 'page-header__title' }, 'Fleet'),
-        e('p', { className: 'page-header__sub' }, 'Loading fleet data...')
+      e('div', { className: 'glass-page-header' },
+        e('h1', null, 'Fleet'),
+        e('p', null, 'Loading fleet data...')
       )
     );
   }
@@ -54,19 +53,19 @@ function FleetPage() {
   var onlineCount = displayMachines.filter(function(m) { return m.hasMetrics; }).length;
 
   return e('div', null,
-    e('div', { className: 'page-header' },
-      e('h1', { className: 'page-header__title' }, 'Fleet'),
-      e('p', { className: 'page-header__sub' }, displayMachines.length + ' machines registered \u00b7 ' + onlineCount + ' reporting')
+    e('div', { className: 'glass-page-header' },
+      e('h1', null, 'Fleet'),
+      e('p', null, displayMachines.length + ' machines registered \u00b7 ' + onlineCount + ' reporting')
     ),
     displayMachines.length === 0
-      ? e('div', { className: 'card', style: { textAlign: 'center', padding: '40px' } },
+      ? e('div', { className: 'glass-card', style: { textAlign: 'center', padding: '40px' } },
           e('div', { style: { fontSize: '13px', color: 'var(--text-dim)' } }, 'No machines registered in fleet configuration.')
         )
-      : e('div', { className: 'grid-2' },
+      : e('div', { className: 'glass-card-grid' },
           displayMachines.map(function(m) {
             var tempColor = m.gpuTemp != null && m.gpuTemp > 75 ? 'var(--danger)' : m.gpuTemp != null && m.gpuTemp > 60 ? 'var(--warning)' : 'var(--success)';
 
-            return e('div', { key: m.id, className: 'card', style: { animation: 'fadeIn 0.3s ease', opacity: m.hasMetrics ? 1 : 0.6 } },
+            return e('div', { key: m.id, className: 'glass-card', style: { opacity: m.hasMetrics ? 1 : 0.6 } },
               e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '14px' } },
                 e('div', null,
                   e('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' } },
@@ -96,14 +95,14 @@ function FleetPage() {
                     e(GaugeBar, { label: 'RAM', value: m.ram > 0 ? Math.round((m.ramUsed || 0) / m.ram * 100) : 0, detail: (m.ramUsed || 0).toFixed(1) + '/' + (m.ram || 0).toFixed(1) + 'GB' }),
                     e(GaugeBar, { label: 'Disk', value: m.disk || 0, detail: Math.round(m.diskUsed || 0) + '/' + Math.round(m.diskTotal || 0) + 'GB', color: 'blue' })
                   )
-                : e('div', { style: { padding: '16px 0', textAlign: 'center', color: 'var(--text-dim)', fontSize: '12px', borderTop: '1px solid var(--border)', borderBottom: '1px solid var(--border)' } },
+                : e('div', { style: { padding: '16px 0', textAlign: 'center', color: 'var(--text-dim)', fontSize: '12px', borderTop: '1px solid rgba(255,255,255,0.03)', borderBottom: '1px solid rgba(255,255,255,0.03)' } },
                     'Machine registered but not reporting metrics.',
                     e('br', null),
                     e('span', { style: { fontSize: '10px', color: 'var(--text-dim)' } }, 'Config: ' + m.gpu_label + ' \u00b7 ' + ((m.config && m.config.ram) || m.arch))
                   ),
 
               m.hasMetrics
-                ? e('div', { style: { display: 'flex', justifyContent: 'space-between', marginTop: '12px', paddingTop: '10px', borderTop: '1px solid var(--border)', fontSize: '11px', color: 'var(--text-secondary)' } },
+                ? e('div', { style: { display: 'flex', justifyContent: 'space-between', marginTop: '12px', paddingTop: '10px', borderTop: '1px solid rgba(255,255,255,0.03)', fontSize: '11px', color: 'var(--text-secondary)' } },
                     e('span', null, m.gpu_label),
                     e('span', null, m.os)
                   )
@@ -112,7 +111,6 @@ function FleetPage() {
           })
         ),
 
-    // Compute History (collapsible)
     e(ComputeHistory)
   );
 }

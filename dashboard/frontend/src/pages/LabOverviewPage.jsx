@@ -7,8 +7,6 @@ import { authFetch } from '../utils/authFetch'
 import { Icon } from '../components/Icon'
 import { StatusDot } from '../components/StatusDot'
 import { Badge } from '../components/Badge'
-import { MetricCard } from '../components/MetricCard'
-import { ProgressBar } from '../components/ProgressBar'
 
 var e = React.createElement;
 
@@ -73,34 +71,50 @@ function LabOverviewPage() {
     };
   }) : [];
 
-  // Real tasks from agent API
   var recentTasks = agentsData && agentsData.tasks ? agentsData.tasks.slice(0, 4) : [];
-
-  // Real activity from /api/summary
   var activityFeed = apiData && apiData.recent_activity ? apiData.recent_activity : [];
 
   return e('div', null,
-    e('div', { className: 'page-header' },
-      e('h1', { className: 'page-header__title' }, 'Mission Control'),
-      e('p', { className: 'page-header__sub' }, 'Robotics Fleet Intelligence')
+    e('div', { className: 'glass-page-header' },
+      e('h1', null, 'Mission Control'),
+      e('p', null, 'Robotics Fleet Intelligence')
     ),
 
-    openIncidents > 0 ? e('div', { className: 'alert-banner alert-banner--danger' },
+    openIncidents > 0 ? e('div', {
+      className: 'glass-card',
+      style: { marginBottom: '14px', background: 'rgba(184,84,84,0.1)', border: '1px solid rgba(184,84,84,0.25)', display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 12px' }
+    },
       Icon('alert'),
-      e('span', null, openIncidents + ' active alert' + (openIncidents > 1 ? 's' : ''))
+      e('span', { style: { fontSize: '11px', fontWeight: 500, color: '#c87070' } }, openIncidents + ' active alert' + (openIncidents > 1 ? 's' : ''))
     ) : null,
 
-    e('div', { className: 'grid-4 mb-20' },
-      e(MetricCard, { label: 'Machines Online', value: machinesOnline + '/' + machinesTotal, sub: (machinesTotal - machinesOnline) + ' offline', borderColor: 'var(--success)' }),
-      e(MetricCard, { label: 'Models Loaded', value: String(modelsLoaded), sub: 'across fleet', borderColor: 'var(--info)' }),
-      e(MetricCard, { label: 'Active Tasks', value: String(activeTasks), sub: activeTasks > 0 ? 'in progress' : 'idle', borderColor: 'var(--accent)' }),
-      e(MetricCard, { label: 'Open Incidents', value: String(openIncidents), sub: openIncidents > 0 ? 'Needs attention' : 'All clear', borderColor: openIncidents > 0 ? 'var(--danger)' : 'var(--success)' })
+    e('div', { className: 'glass-metric-row' },
+      e('div', { className: 'glass-metric' },
+        e('div', { className: 'glass-metric__label' }, 'Machines Online'),
+        e('div', { className: 'glass-metric__value' }, machinesOnline + '/' + machinesTotal),
+        e('div', { className: 'glass-metric__sub' }, (machinesTotal - machinesOnline) + ' offline')
+      ),
+      e('div', { className: 'glass-metric' },
+        e('div', { className: 'glass-metric__label' }, 'Models Loaded'),
+        e('div', { className: 'glass-metric__value' }, String(modelsLoaded)),
+        e('div', { className: 'glass-metric__sub' }, 'across fleet')
+      ),
+      e('div', { className: 'glass-metric' },
+        e('div', { className: 'glass-metric__label' }, 'Active Tasks'),
+        e('div', { className: 'glass-metric__value' }, String(activeTasks)),
+        e('div', { className: 'glass-metric__sub' }, activeTasks > 0 ? 'in progress' : 'idle')
+      ),
+      e('div', { className: 'glass-metric' },
+        e('div', { className: 'glass-metric__label' }, 'Open Incidents'),
+        e('div', { className: 'glass-metric__value' }, String(openIncidents)),
+        e('div', { className: 'glass-metric__sub' }, openIncidents > 0 ? 'Needs attention' : 'All clear')
+      )
     ),
 
-    e('div', { className: 'grid-2 mb-20' },
-      e('div', { className: 'card' },
-        e('div', { className: 'card__header' },
-          e('span', { className: 'card__title' }, 'Fleet Health')
+    e('div', { className: 'glass-card-grid', style: { marginBottom: '10px' } },
+      e('div', { className: 'glass-card' },
+        e('div', { className: 'glass-card__header' },
+          e('span', { className: 'glass-card__title' }, 'Fleet Health')
         ),
         loading && displayMachines.length === 0
           ? e('div', { style: { padding: '20px', textAlign: 'center', color: 'var(--text-dim)', fontSize: '12px' } }, 'Loading fleet data...')
@@ -108,7 +122,7 @@ function LabOverviewPage() {
             ? e('div', { style: { padding: '20px', textAlign: 'center', color: 'var(--text-dim)', fontSize: '12px' } }, 'No machines registered')
             : displayMachines.map(function(m) {
                 var ramPct = m.ram > 0 ? Math.round((m.ramUsed || 0) / m.ram * 100) : null;
-                return e('div', { key: m.id, style: { display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 0', borderBottom: '1px solid var(--border)', opacity: m.hasMetrics ? 1 : 0.5 } },
+                return e('div', { key: m.id, style: { display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 0', borderBottom: '1px solid rgba(255,255,255,0.03)', opacity: m.hasMetrics ? 1 : 0.5 } },
                   e(StatusDot, { status: m.status }),
                   e('span', { style: { flex: 1, fontSize: '12px', fontWeight: 500 } }, m.name),
                   m.hasMetrics
@@ -122,9 +136,9 @@ function LabOverviewPage() {
               })
       ),
 
-      e('div', { className: 'card' },
-        e('div', { className: 'card__header' },
-          e('span', { className: 'card__title' }, 'GPU Utilization')
+      e('div', { className: 'glass-card' },
+        e('div', { className: 'glass-card__header' },
+          e('span', { className: 'glass-card__title' }, 'GPU Utilization')
         ),
         displayMachines.filter(function(m) { return m.hasMetrics; }).length > 0
           ? e(ResponsiveContainer, { width: '100%', height: 260 },
@@ -140,17 +154,17 @@ function LabOverviewPage() {
       )
     ),
 
-    e('div', { className: 'grid-2 mb-20' },
-      e('div', { className: 'card' },
-        e('div', { className: 'card__header' },
-          e('span', { className: 'card__title' }, 'Recent Tasks')
+    e('div', { className: 'glass-card-grid', style: { marginBottom: '10px' } },
+      e('div', { className: 'glass-card' },
+        e('div', { className: 'glass-card__header' },
+          e('span', { className: 'glass-card__title' }, 'Recent Tasks')
         ),
         recentTasks.length === 0
           ? e('div', { style: { padding: '20px', textAlign: 'center', color: 'var(--text-dim)', fontSize: '12px' } }, 'No recent tasks')
           : recentTasks.map(function(t) {
               var agentLabel = (t.agent || '').replace(/_/g, ' ');
               agentLabel = agentLabel.charAt(0).toUpperCase() + agentLabel.slice(1);
-              return e('div', { key: t.id, style: { display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 0', borderBottom: '1px solid var(--border)' } },
+              return e('div', { key: t.id, style: { display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 0', borderBottom: '1px solid rgba(255,255,255,0.03)' } },
                 e(StatusDot, { status: t.success ? 'online' : t.completed ? 'offline' : 'busy' }),
                 e('div', { style: { flex: 1, minWidth: 0 } },
                   e('div', { style: { fontSize: '12px', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, (t.task || '').substring(0, 60)),
@@ -161,20 +175,22 @@ function LabOverviewPage() {
             })
       ),
 
-      e('div', { className: 'card' },
-        e('div', { className: 'card__header' },
-          e('span', { className: 'card__title' }, 'Activity Feed')
+      e('div', { className: 'glass-card' },
+        e('div', { className: 'glass-card__header' },
+          e('span', { className: 'glass-card__title' }, 'Activity Feed')
         ),
         activityFeed.length === 0
           ? e('div', { style: { padding: '20px', textAlign: 'center', color: 'var(--text-dim)', fontSize: '12px' } }, 'No recent activity')
-          : e('div', { className: 'activity-feed' },
+          : e('div', { className: 'glass-timeline' },
               activityFeed.slice(0, 10).map(function(a, i) {
                 var cat = a.category || '';
-                var dotStatus = cat === 'auto_fix' ? 'online' : cat === 'api_escalation' ? 'offline' : 'busy';
-                return e('div', { key: a.id || i, className: 'activity-item' },
-                  e(StatusDot, { status: dotStatus }),
-                  e('span', { className: 'activity-item__time' }, timeAgo(a.timestamp)),
-                  e('span', { className: 'activity-item__msg' }, (a.message || '').substring(0, 100))
+                var dotClass = cat === 'auto_fix' ? 'glass-timeline__dot--success' : cat === 'api_escalation' ? 'glass-timeline__dot--danger' : 'glass-timeline__dot--accent';
+                return e('div', { key: a.id || i, className: 'glass-timeline__item' },
+                  e('div', { className: 'glass-timeline__dot ' + dotClass }),
+                  e('div', { className: 'glass-timeline__content' },
+                    e('span', { className: 'glass-timeline__msg' }, (a.message || '').substring(0, 100)),
+                    e('span', { className: 'glass-timeline__time' }, timeAgo(a.timestamp))
+                  )
                 );
               })
             )
