@@ -189,11 +189,11 @@ function BuildsTab() {
               ),
               isExp ? e('tr', { className: 'glass-table__detail-row' },
                 e('td', { colSpan: 5 },
-                  b.steps ? e('div', { className: 'glass-log', style: { marginBottom: '8px' } },
+                  b.steps && b.steps.length ? e('div', { className: 'glass-log', style: { marginBottom: '8px' } },
                     e('strong', null, 'Steps:'),
                     e('pre', null, typeof b.steps === 'string' ? b.steps : JSON.stringify(b.steps, null, 2))
                   ) : null,
-                  b.null_report ? e('div', { className: 'glass-log', style: { marginBottom: '8px' } },
+                  b.null_report && b.null_report.length ? e('div', { className: 'glass-log', style: { marginBottom: '8px' } },
                     e('strong', null, 'NULL Report:'),
                     e('pre', null, typeof b.null_report === 'string' ? b.null_report : JSON.stringify(b.null_report, null, 2))
                   ) : null,
