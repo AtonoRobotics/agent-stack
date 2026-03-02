@@ -87,8 +87,8 @@ function Ros2Tab() {
       authFetch('/mc/api/ros2/nodes').then(function(r) { return r.json(); }).catch(function() { return []; })
     ]).then(function(results) {
       setRosStatus(results[0]);
-      setTopics(results[1].items || results[1] || []);
-      setNodes(results[2].items || results[2] || []);
+      var t = results[1]; setTopics(Array.isArray(t) ? t : t.topics || t.items || []);
+      var n = results[2]; setNodes(Array.isArray(n) ? n : n.nodes || n.items || []);
       setLoading(false);
     }).catch(function() { setLoading(false); });
   }, []);
