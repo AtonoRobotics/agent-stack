@@ -2,6 +2,11 @@ config/secrets.yml
 data/users.json
 data/api_keys.json
 data/*.db
+data/*.db-shm
+data/*.db-wal
+*.db-shm
+*.db-wal
+**/*.db
 logs/
 __pycache__/
 *.pyc
